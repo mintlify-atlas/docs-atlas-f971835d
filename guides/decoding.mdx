@@ -1,0 +1,182 @@
+---
+title: "Configuring decoders using Stim's error models"
+description: "Use Stim to generate detector error models and detection event samples, then wire them into external decoders to measure logical error rates."
+---
+
+Stim handles two of the three tasks in a QEC decoding benchmark: generating the probabilistic error model for the code, and producing batches of noisy syndrome samples. The third task — predicting which logical errors occurred — is performed by an external **decoder** library. This separation of concerns means you can swap in any decoder without changing your circuit or sampling code.
+
+## The standard decoding workflow
+
+<Steps>
+  <Step title="Build a noisy circuit">
+    Use `stim.Circuit` or `stim.Circuit.generated` to create a circuit annotated with noise, `DETECTOR` instructions, and `OBSERVABLE_INCLUDE` instructions.
+
+    ```python
+    import stim
+
+    circuit = stim.Circuit.generated(
+        "surface_code:rotated_memory_x",
+        rounds=5,
+        distance=5,
+        after_clifford_depolarization=0.001,
+    )
+    ```
+  </Step>
+
+  <Step title="Generate the detector error model">
+    Call `circuit.detector_error_model(decompose_errors=True)` to produce a graphlike DEM that matching decoders can consume directly.
+
+    ```python
+    dem = circuit.detector_error_model(decompose_errors=True)
+    ```
+
+    The `decompose_errors=True` flag splits hyper-errors (those touching more than two detectors) into pairs of graphlike pieces. This is required by minimum-weight perfect matching decoders such as PyMatching.
+  </Step>
+
+  <Step title="Configure the decoder from the DEM">
+    Pass the DEM to your decoder of choice. PyMatching, for example, accepts a Stim DEM directly:
+
+    ```python
+    import pymatching
+
+    matcher = pymatching.Matching.from_detector_error_model(dem)
+    ```
+  </Step>
+
+  <Step title="Sample detection events">
+    Compile a detector sampler from the circuit and draw a batch of shots.
+
+    ```python
+    sampler = circuit.compile_detector_sampler()
+    dets, obs_actual = sampler.sample(
+        shots=100_000,
+        separate_observables=True,
+    )
+    # dets.shape      == (100_000, num_detectors)
+    # obs_actual.shape == (100_000, num_observables)
+    ```
+  </Step>
+
+  <Step title="Decode and count logical errors">
+    Feed each shot's detection events to the decoder and compare its predictions against the actual observable flips.
+
+    ```python
+    obs_predicted = matcher.decode_batch(dets)
+
+    num_errors = (obs_predicted != obs_actual).any(axis=1).sum()
+    logical_error_rate = num_errors / 100_000
+    print(f"Logical error rate: {logical_error_rate:.4f}")
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Common decoder libraries
+
+<CardGroup cols={2}>
+  <Card title="PyMatching" icon="circle-nodes" href="https://pymatching.readthedocs.io">
+    Minimum-weight perfect matching decoder. Accepts Stim DEMs directly via `Matching.from_detector_error_model(dem)`. The most widely used decoder for surface codes and repetition codes.
+  </Card>
+  <Card title="BeliefMatching" icon="chart-network" href="https://github.com/oscarhiggott/BeliefMatching">
+    Combines belief propagation with matching for improved thresholds on some code families. Also accepts Stim DEMs.
+  </Card>
+</CardGroup>
+
+<Note>
+Any decoder that accepts a Tanner graph (or a list of error mechanisms with associated detector sets and probabilities) can be configured from a Stim DEM. The DEM's `error(p) D… L…` instructions map directly to edges in the decoding graph.
+</Note>
+
+---
+
+## Full end-to-end example
+
+```python
+import stim
+import pymatching
+import numpy as np
+
+# 1. Build noisy circuit
+circuit = stim.Circuit.generated(
+    "surface_code:rotated_memory_x",
+    rounds=3,
+    distance=3,
+    after_clifford_depolarization=0.005,
+)
+
+# 2. Generate graphlike DEM
+dem = circuit.detector_error_model(decompose_errors=True)
+
+# 3. Configure decoder
+matcher = pymatching.Matching.from_detector_error_model(dem)
+
+# 4. Sample detection events
+sampler = circuit.compile_detector_sampler()
+dets, obs_actual = sampler.sample(
+    shots=50_000,
+    separate_observables=True,
+)
+
+# 5. Decode and count logical errors
+obs_predicted = matcher.decode_batch(dets)
+num_errors = (obs_predicted != obs_actual).any(axis=1).sum()
+print(f"Shots      : 50000")
+print(f"Errors     : {num_errors}")
+print(f"Error rate : {num_errors / 50_000:.4e}")
+```
+
+---
+
+## Verifying circuit correctness before decoding
+
+Before investing in sampling, confirm the circuit has the expected code distance.
+
+### Shortest graphlike error
+
+`circuit.shortest_graphlike_error()` finds the minimum-weight set of graphlike errors that create an undetected logical flip. The length of the result equals the graphlike code distance:
+
+```python
+logical_error = circuit.shortest_graphlike_error()
+print(f"Graphlike distance: {len(logical_error)}")
+
+# Inspect the physical locations of each error
+for explained_err in logical_error:
+    for loc in explained_err.circuit_error_locations:
+        print(loc)
+```
+
+### Searching for undetectable logical errors (heuristic)
+
+`circuit.search_for_undetectable_logical_errors()` is a heuristic that can find logical errors involving hyper-edges (non-graphlike errors). It explores the error graph breadth-first but requires truncation parameters to stay tractable:
+
+```python
+logical_errors = circuit.search_for_undetectable_logical_errors(
+    dont_explore_detection_event_sets_with_size_above=4,
+    dont_explore_edges_with_degree_above=4,
+    dont_explore_edges_increasing_symptom_degree=True,
+)
+print(f"Found logical error of weight {len(logical_errors)}")
+```
+
+<Warning>
+`search_for_undetectable_logical_errors` is a heuristic; it does not guarantee finding the minimum-weight logical error. Use `shortest_graphlike_error` when you need a guarantee (limited to graphlike errors only).
+</Warning>
+
+---
+
+## Tips for production workflows
+
+<AccordionGroup>
+  <Accordion title="Pre-generate the DEM once, reuse across batches">
+    The DEM is deterministic for a fixed circuit. Generate it once, configure the decoder, then call `sampler.sample` in a loop across as many batches as needed. Avoid regenerating the DEM inside a hot loop.
+  </Accordion>
+  <Accordion title="Use bit-packed arrays for memory efficiency">
+    Pass `bit_packed=True` to `sampler.sample` to receive `uint8` arrays instead of `bool_` arrays. This reduces memory usage by 8×, which matters at shot counts above ~10^6.
+  </Accordion>
+  <Accordion title="Stream shots to disk for very large experiments">
+    Use `sampler.sample_write(shots, filepath=..., format="b8")` to stream detection events directly to a file. You can then decode the file in chunks to avoid holding all shots in memory simultaneously.
+  </Accordion>
+  <Accordion title="Separate observable output">
+    Always use `separate_observables=True` (or `obs_out_filepath` with `sample_write`) to keep ground-truth observable flips separate from the detection events you feed to the decoder. Mixing them causes incorrect error-rate calculations.
+  </Accordion>
+</AccordionGroup>

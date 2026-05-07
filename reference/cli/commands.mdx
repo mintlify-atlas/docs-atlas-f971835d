@@ -1,0 +1,706 @@
+---
+title: "Stim CLI command reference: all subcommands"
+description: "Full reference for all eleven stim subcommands, including complete synopsis, flag-by-flag descriptions, and runnable bash examples for each command."
+---
+
+This page documents every subcommand available in the `stim` CLI. Each entry includes the full command synopsis showing required and optional flags, descriptions of each flag drawn directly from the Stim source, and working examples you can run from your shell. All commands read from stdin and write to stdout by default; use `--in` and `--out` to redirect to files.
+
+<AccordionGroup>
+
+<Accordion title="stim analyze_errors" id="analyze_errors">
+
+Converts a Stim circuit into a detector error model (DEM). The output describes all the ways that circuit errors can produce detection events, expressed as independent probabilistic error mechanisms.
+
+**Synopsis**
+
+```bash
+stim analyze_errors \
+    [--allow_gauge_detectors] \
+    [--approximate_disjoint_errors [probability]] \
+    [--block_decompose_from_introducing_remnant_edges] \
+    [--decompose_errors] \
+    [--fold_loops] \
+    [--ignore_decomposition_failures] \
+    [--in filepath] \
+    [--out filepath]
+```
+
+**Flags**
+
+| Flag | Description |
+|---|---|
+| `--allow_gauge_detectors` | Allows non-deterministic detectors in the circuit. Instead of raising an error, Stim appends a 50% error mechanism for detectors that anticommute with a reset or measurement. |
+| `--approximate_disjoint_errors [probability]` | Allows disjoint error channels (e.g. `PAULI_CHANNEL_1`) to be approximated as independent mechanisms. Accepts an optional probability threshold between 0 and 1. |
+| `--block_decompose_from_introducing_remnant_edges` | Prevents the error decomposer from introducing remnant edges — detector sets that only appear as leftovers when splitting a larger error. Only relevant with `--decompose_errors`. |
+| `--decompose_errors` | Decomposes non-graphlike errors (those producing more than two detection events) into graphlike pieces with at most two detection events each, using `^` to annotate suggested splits. Required for use with matching decoders. |
+| `--fold_loops` | Enables loop folding for circuits containing `REPEAT` blocks. Substantially reduces analysis time for large repeat counts by detecting periodicity with a cycle-detection algorithm. |
+| `--ignore_decomposition_failures` | When `--decompose_errors` is active, allows non-graphlike errors to pass through into the output instead of causing an abort. |
+| `--in filepath` | Path to the input Stim circuit file. Defaults to stdin. |
+| `--out filepath` | Path to write the output detector error model. Defaults to stdout. |
+
+**Examples**
+
+```bash
+# Analyze a simple circuit from a file
+stim analyze_errors --in example_circuit.stim
+```
+
+```bash
+# Generate a repetition code circuit and analyze it with loop folding
+stim gen \
+    --code repetition_code \
+    --task memory \
+    --distance 3 \
+    --rounds 1000 \
+    --after_reset_flip_probability 0.125 \
+    > rep_code.stim
+
+stim analyze_errors --fold_loops --in rep_code.stim
+```
+
+```bash
+# Decompose errors into graphlike pieces for use with a matching decoder
+stim analyze_errors \
+    --decompose_errors \
+    --fold_loops \
+    --in surface_code.stim \
+    --out surface_code.dem
+```
+
+</Accordion>
+
+<Accordion title="stim convert" id="convert">
+
+Converts measurement or detection event data between Stim's supported result formats: `01` (dense text), `b8` (bit-packed binary), `r8` (run-length binary), `ptb64` (SIMD-friendly binary), `hits` (sparse text), and `dets` (sparse text with type prefixes).
+
+**Synopsis**
+
+```bash
+stim convert \
+    --bits_per_shot int \
+    [--circuit filepath] \
+    [--in filepath] \
+    [--in_format 01|b8|r8|ptb64|hits|dets] \
+    --num_detectors int \
+    --num_measurements int \
+    --num_observables int \
+    [--obs_out filepath] \
+    [--obs_out_format 01|b8|r8|ptb64|hits|dets] \
+    [--out filepath] \
+    [--out_format 01|b8|r8|ptb64|hits|dets] \
+    --types M|D|L
+```
+
+**Flags**
+
+| Flag | Description |
+|---|---|
+| `--bits_per_shot int` | Number of bits per record when not using a circuit or DEM to infer sizes. Required when `--circuit`, `--dem`, and `--num_*` flags are all absent. Not supported when writing to `dets` format. |
+| `--circuit filepath` | Path to the Stim circuit that generated the data. Used to infer `--num_measurements`, `--num_detectors`, and `--num_observables`. |
+| `--in filepath` | Path to the input data file. Defaults to stdin. |
+| `--in_format 01\|b8\|r8\|ptb64\|hits\|dets` | Format of the input data. Defaults to `01`. |
+| `--num_detectors int` | Number of detectors per record. Required when writing `dets` format without a circuit or DEM. |
+| `--num_measurements int` | Number of measurements per record. Required when writing `dets` format without a circuit. |
+| `--num_observables int` | Number of observables per record. Required when writing `dets` format without a circuit or DEM. |
+| `--obs_out filepath` | Path to write observable flip data extracted from the input. |
+| `--obs_out_format 01\|b8\|r8\|ptb64\|hits\|dets` | Format for the observable output file. Defaults to `01`. Irrelevant unless `--obs_out` is specified. |
+| `--out filepath` | Path to write the converted output. Defaults to stdout. |
+| `--out_format 01\|b8\|r8\|ptb64\|hits\|dets` | Format for the output data. Defaults to `01`. |
+| `--types M\|D\|L` | Specifies which event types (measurements, detectors, observables) are present in the input. Required when `--circuit` is given. |
+
+**Examples**
+
+```bash
+# Convert 01 format to dets format, specifying measurement count directly
+stim convert \
+    --in example.01 \
+    --in_format 01 \
+    --out_format dets \
+    --num_measurements 5
+```
+
+```bash
+# Convert dets format back to 01 using a DEM to infer sizes
+stim convert \
+    --in example.dets \
+    --in_format dets \
+    --out_format 01 \
+    --dem example.dem
+```
+
+```bash
+# Convert measurement data to dets using a circuit to infer type counts
+stim convert \
+    --in measurements.01 \
+    --in_format 01 \
+    --out_format dets \
+    --circuit example_circuit.stim \
+    --types M
+```
+
+```bash
+# Convert 01 to hits format using explicit bit-width
+stim convert \
+    --in example.01 \
+    --in_format 01 \
+    --out_format hits \
+    --bits_per_shot 4
+```
+
+</Accordion>
+
+<Accordion title="stim detect" id="detect">
+
+Samples detection events and observable flips from a noisy circuit. Detection events indicate which detectors fired (i.e., produced an unexpected parity), while observable flips indicate whether logical observables were corrupted by errors.
+
+**Synopsis**
+
+```bash
+stim detect \
+    [--append_observables] \
+    [--in filepath] \
+    [--obs_out filepath] \
+    [--obs_out_format 01|b8|r8|ptb64|hits|dets] \
+    [--out filepath] \
+    [--out_format 01|b8|r8|ptb64|hits|dets] \
+    [--seed int] \
+    [--shots int]
+```
+
+**Flags**
+
+| Flag | Description |
+|---|---|
+| `--append_observables` | Appends observable flip data to the end of each detection sample as if they were extra detectors. Prefer `--obs_out` to keep the data separate. |
+| `--in filepath` | Path to the Stim circuit file. Defaults to stdin. |
+| `--obs_out filepath` | Path to write observable flip data separately from the detection events. |
+| `--obs_out_format 01\|b8\|r8\|ptb64\|hits\|dets` | Format for the observable output file. Defaults to `01`. |
+| `--out filepath` | Path to write the detection event samples. Defaults to stdout. |
+| `--out_format 01\|b8\|r8\|ptb64\|hits\|dets` | Format for the detection event output. Defaults to `01`. |
+| `--seed int` | Non-negative 64-bit integer seed for the random number generator. Makes results reproducible within the same Stim version and machine architecture. |
+| `--shots int` | Number of samples to take. Defaults to 1. Maximum is 10^18. |
+
+<Note>
+Seeded results are not guaranteed to be reproducible across different Stim versions or different machine architectures (e.g., machines with vs. without AVX2 support).
+</Note>
+
+**Examples**
+
+```bash
+# Sample 5 shots of detection events from a circuit
+stim detect --shots 5 --in example.stim
+```
+
+```bash
+# Sample in dets format and write observable flips to a separate file
+stim detect \
+    --in example.stim \
+    --out_format dets \
+    --shots 10000 \
+    --out detections.dets \
+    --obs_out observables.01 \
+    --obs_out_format 01
+```
+
+```bash
+# Sample with a fixed seed for reproducibility
+stim detect \
+    --in example.stim \
+    --shots 1000 \
+    --seed 42 \
+    --out detections.01
+```
+
+</Accordion>
+
+<Accordion title="stim diagram" id="diagram">
+
+Produces various diagrams of Stim circuits and detector error models. Output types include ASCII text, SVG images, and GLTF 3D models. Use `--type` to select the diagram format and `--tick` to restrict the view to a specific time slice.
+
+**Synopsis**
+
+```bash
+stim diagram \
+    [--filter_coords coords] \
+    [--in filepath] \
+    [--out filepath] \
+    [--remove_noise] \
+    [--tick int | int:int] \
+    --type name
+```
+
+**Flags**
+
+| Flag | Description |
+|---|---|
+| `--filter_coords coords` | Coordinate filter controlling which detectors appear. Points are comma-separated coordinates; multiple points are colon-separated (e.g. `2,3:4,5,6`). Also accepts detector indices like `D0` or observable indices like `L0`. |
+| `--in filepath` | Path to the input circuit or DEM file. Defaults to stdin. |
+| `--out filepath` | Path to write the diagram. Defaults to stdout. |
+| `--remove_noise` | Strips noise instructions from the input before diagramming, to focus on circuit structure. |
+| `--tick int \| int:int` | Restricts the diagram to a specific TICK or half-open range of TICKs (e.g. `--tick=5` or `--tick=2:7`). Tick 0 is before the first TICK instruction. |
+| `--type name` | **Required.** Selects the diagram type (see below). |
+
+**Available diagram types**
+
+| Type | Input | Description |
+|---|---|---|
+| `timeline-text` | Circuit | ASCII diagram of operations over time, qubits top-to-bottom, time left-to-right. |
+| `timeline-svg` | Circuit | SVG image of the circuit timeline. |
+| `timeline-3d` | Circuit | GLTF 3D model of the circuit timeline. |
+| `timeline-3d-html` | Circuit | Self-contained HTML page with an interactive 3D circuit viewer. |
+| `matchgraph-svg` | Circuit or DEM | SVG image of the decoding graph. Red lines cross logical observables. |
+| `matchgraph-3d` | Circuit or DEM | GLTF 3D model of the decoding graph. |
+| `matchgraph-3d-html` | Circuit or DEM | Self-contained HTML page with an interactive 3D decoding graph viewer. |
+| `detslice-text` | Circuit | ASCII diagram of the stabilizers that detectors measure at a given tick. |
+| `detslice-svg` | Circuit | SVG image of detector stabilizers at a given tick. Uses Pauli color convention XYZ=RGB. |
+| `timeslice-svg` | Circuit | SVG image of the operations applied during a given tick or tick range. |
+| `detslice-with-ops-svg` | Circuit | SVG combining a timeslice and the resulting detector slices. |
+
+**Examples**
+
+```bash
+# ASCII timeline of a circuit
+stim diagram --in example_circuit.stim --type timeline-text
+```
+
+```bash
+# SVG image of the circuit timeline saved to a file
+stim diagram \
+    --in surface_code.stim \
+    --type timeline-svg \
+    --out circuit_timeline.svg
+```
+
+```bash
+# Detector slice at tick 5, filtered to a specific region
+stim diagram \
+    --in surface_code.stim \
+    --type detslice-svg \
+    --tick 5 \
+    --filter_coords 2,2:4,2 \
+    --out slice.svg
+```
+
+```bash
+# Strip noise and show just the circuit structure
+stim diagram \
+    --in noisy_circuit.stim \
+    --type timeline-text \
+    --remove_noise
+```
+
+</Accordion>
+
+<Accordion title="stim explain_errors" id="explain_errors">
+
+Finds which specific physical circuit errors are responsible for producing the error mechanisms in a detector error model. Given a DEM filter, only the matching error mechanisms are explained. This is useful for debugging circuit annotations and for understanding what a decoder's corrections correspond to physically.
+
+**Synopsis**
+
+```bash
+stim explain_errors \
+    [--dem_filter filepath] \
+    [--in filepath] \
+    [--out filepath] \
+    [--single]
+```
+
+**Flags**
+
+| Flag | Description |
+|---|---|
+| `--dem_filter filepath` | Path to a DEM file specifying which error mechanisms to explain. If omitted, every single-error mechanism in the circuit is explained. |
+| `--in filepath` | Path to the Stim circuit file. Defaults to stdin. |
+| `--out filepath` | Path to write the explanations. Defaults to stdout. Output is semi-human-readable text. |
+| `--single` | Outputs only the simplest circuit error explanation for each DEM error, chosen by heuristics (fewer Pauli terms, earlier in the circuit). Without this flag, all possible single-error explanations are output. |
+
+<Note>
+`stim explain_errors` can only explain detection events that result from a single physical error. To explain a set of detection events requiring multiple errors, first use a decoder (e.g. pymatching) to identify the contributing DEM errors, then use this command to map those DEM errors to circuit locations.
+</Note>
+
+**Examples**
+
+```bash
+# Find the circuit error that caused a specific DEM error
+stim gen \
+    --code surface_code \
+    --task rotated_memory_z \
+    --distance 5 \
+    --rounds 10 \
+    --after_clifford_depolarization 0.001 \
+    > example.stim
+
+echo "error(1) D97 D102" > filter.dem
+
+stim explain_errors \
+    --single \
+    --in example.stim \
+    --dem_filter filter.dem
+```
+
+```bash
+# Explain all error mechanisms in the circuit
+stim explain_errors --in example.stim
+```
+
+</Accordion>
+
+<Accordion title="stim gen" id="gen">
+
+Generates example quantum error correction circuits with noise, detector annotations, logical observable definitions, and qubit coordinates. Supports the repetition code, surface code, and color code. Generated circuits are useful for quickly testing workflows, not for production research.
+
+**Synopsis**
+
+```bash
+stim gen \
+    [--after_clifford_depolarization probability] \
+    [--after_reset_flip_probability probability] \
+    [--before_measure_flip_probability probability] \
+    [--before_round_data_depolarization probability] \
+    --code surface_code|repetition_code|color_code \
+    --distance int \
+    [--out filepath] \
+    --rounds int \
+    --task name
+```
+
+**Flags**
+
+| Flag | Description |
+|---|---|
+| `--after_clifford_depolarization probability` | Adds `DEPOLARIZE1(p)` after single-qubit Clifford gates and `DEPOLARIZE2(p)` after two-qubit Clifford gates. Defaults to 0. |
+| `--after_reset_flip_probability probability` | Adds `X_ERROR(p)` after `R`/`RY` resets and `Z_ERROR(p)` after `RX` resets. Defaults to 0. |
+| `--before_measure_flip_probability probability` | Adds `X_ERROR(p)` before `M`/`MY` measurements and `Z_ERROR(p)` before `MX` measurements. Defaults to 0. |
+| `--before_round_data_depolarization probability` | Adds `DEPOLARIZE1(p)` to each data qubit at the start of every stabilizer measurement round. Defaults to 0. |
+| `--code surface_code\|repetition_code\|color_code` | **Required.** The error correcting code to generate. |
+| `--distance int` | **Required.** Code distance — the minimum number of physical errors that cause a logical error. |
+| `--out filepath` | Path to write the generated circuit. Defaults to stdout. |
+| `--rounds int` | **Required.** Number of stabilizer measurement rounds. Must be between 1 and 10^18. |
+| `--task name` | **Required.** The experiment the circuit runs. See table below. |
+
+**Available codes and tasks**
+
+| Code | Task | Description |
+|---|---|---|
+| `repetition_code` | `memory` | Initialize `\|0>`, preserve against noise for N rounds, then measure. |
+| `surface_code` | `rotated_memory_x` | Initialize `\|+>` in a rotated surface code, preserve, measure in X basis. |
+| `surface_code` | `rotated_memory_z` | Initialize `\|0>` in a rotated surface code, preserve, measure in Z basis. |
+| `surface_code` | `unrotated_memory_x` | Initialize `\|+>` in an unrotated surface code, preserve, measure in Z basis. |
+| `surface_code` | `unrotated_memory_z` | Initialize `\|0>` in an unrotated surface code, preserve, measure in Z basis. |
+| `color_code` | `memory_xyz` | Initialize `\|0>`, preserve, measure. Alternates X, Y, Z stabilizer rounds. |
+
+**Examples**
+
+```bash
+# Generate a distance-3 repetition code circuit with gate depolarization
+stim gen \
+    --code repetition_code \
+    --task memory \
+    --distance 3 \
+    --rounds 100 \
+    --after_clifford_depolarization 0.001
+```
+
+```bash
+# Generate a distance-5 rotated surface code with phenomenological noise
+stim gen \
+    --code surface_code \
+    --task rotated_memory_z \
+    --distance 5 \
+    --rounds 10 \
+    --before_round_data_depolarization 0.001 \
+    --out surface_code_d5.stim
+```
+
+```bash
+# Generate a circuit and pipe directly into analyze_errors
+stim gen \
+    --code surface_code \
+    --task rotated_memory_x \
+    --distance 5 \
+    --rounds 100 \
+    --after_clifford_depolarization 0.001 \
+    | stim analyze_errors --decompose_errors --fold_loops
+```
+
+</Accordion>
+
+<Accordion title="stim help" id="help">
+
+Prints helpful information about using Stim. When run without subcommands, this displays the list of available commands and general usage guidance.
+
+**Synopsis**
+
+```bash
+stim help
+```
+
+**Examples**
+
+```bash
+# Print general help
+stim help
+
+# Print help for a specific command using the --help flag
+stim sample --help
+stim analyze_errors --help
+stim gen --help
+```
+
+</Accordion>
+
+<Accordion title="stim m2d" id="m2d">
+
+Converts raw measurement data (as collected from quantum hardware) into detection event data. Stim determines the expected parity of each detector's measurement set by simulating a noiseless reference sample from the circuit, then compares the actual measurements against those expectations to produce detection events.
+
+**Synopsis**
+
+```bash
+stim m2d \
+    [--append_observables] \
+    --circuit filepath \
+    [--in filepath] \
+    [--in_format 01|b8|r8|ptb64|hits|dets] \
+    [--obs_out filepath] \
+    [--obs_out_format 01|b8|r8|ptb64|hits|dets] \
+    [--out filepath] \
+    [--out_format 01|b8|r8|ptb64|hits|dets] \
+    [--ran_without_feedback] \
+    [--skip_reference_sample] \
+    --sweep filepath \
+    [--sweep_format 01|b8|r8|ptb64|hits|dets]
+```
+
+**Flags**
+
+| Flag | Description |
+|---|---|
+| `--append_observables` | Appends observable flip data to each detection sample as if they were extra detectors. Prefer `--obs_out` to keep data separate. |
+| `--circuit filepath` | **Required.** Path to the Stim circuit that was run on hardware. Defines how to derive detection events from measurements. |
+| `--in filepath` | Path to the measurement data file. Defaults to stdin. |
+| `--in_format 01\|b8\|r8\|ptb64\|hits\|dets` | Format of the input measurement data. Defaults to `01`. |
+| `--obs_out filepath` | Path to write observable flip data separately. |
+| `--obs_out_format 01\|b8\|r8\|ptb64\|hits\|dets` | Format for the observable output. Defaults to `01`. |
+| `--out filepath` | Path to write the detection event data. Defaults to stdout. |
+| `--out_format 01\|b8\|r8\|ptb64\|hits\|dets` | Format for the detection event output. Defaults to `01`. |
+| `--ran_without_feedback` | Indicates the quantum hardware skipped Pauli feedback operations. The m2d conversion will account for the feedback effects during post-processing. |
+| `--skip_reference_sample` | Assumes the all-zeros measurement result is a valid noiseless circuit output. Skips the tableau simulation of the reference sample for improved performance. |
+| `--sweep filepath` | Path to a file with sweep configuration bits that control which conditional Pauli gates were active per shot. |
+| `--sweep_format 01\|b8\|r8\|ptb64\|hits\|dets` | Format of the sweep configuration data. Defaults to `01`. |
+
+<Note>
+Use `--skip_reference_sample` only when the circuit genuinely produces all-zero measurements under noiseless execution. When this assumption is violated, the output will be incorrect.
+</Note>
+
+**Examples**
+
+```bash
+# Convert hardware measurements to detection events
+stim m2d \
+    --circuit example_circuit.stim \
+    --in hardware_measurements.01 \
+    --in_format 01 \
+    --out_format dets \
+    --obs_out observables.01
+```
+
+```bash
+# Convert and append observables as extra detectors
+stim m2d \
+    --append_observables \
+    --circuit example_circuit.stim \
+    --in hardware_measurements.01 \
+    --in_format 01 \
+    --out_format dets
+```
+
+```bash
+# Convert with sweep data for circuits using conditional Pauli gates
+stim m2d \
+    --circuit example_circuit.stim \
+    --in hardware_measurements.b8 \
+    --in_format b8 \
+    --out detections.b8 \
+    --out_format b8 \
+    --sweep sweep_data.01 \
+    --sweep_format 01
+```
+
+</Accordion>
+
+<Accordion title="stim repl" id="repl">
+
+Runs Stim in interactive read-evaluate-print-loop (REPL) mode. You type circuit instructions one at a time, and Stim immediately prints measurement results. Useful for quick experiments and exploring how circuits behave.
+
+**Synopsis**
+
+```bash
+stim repl
+```
+
+**Examples**
+
+```bash
+# Start the REPL
+stim repl
+```
+
+Once in the REPL, type circuit instructions interactively:
+
+```bash
+# Example REPL session
+stim repl
+... M 0
+0
+... X 0
+... M 0
+1
+... X 2 3 9
+... M 0 1 2 3 4 5 6 7 8 9
+1 0 1 1 0 0 0 0 0 1
+... REPEAT 5 {
+...     R 0 1
+...     H 0
+...     CNOT 0 1
+...     M 0 1
+... }
+00
+11
+11
+00
+11
+```
+
+</Accordion>
+
+<Accordion title="stim sample" id="sample">
+
+Samples raw measurement results from a Stim circuit. Each shot produces one measurement result per measurement instruction in the circuit. For sampling detection events instead, use `stim detect`.
+
+**Synopsis**
+
+```bash
+stim sample \
+    [--in filepath] \
+    [--out filepath] \
+    [--out_format 01|b8|r8|ptb64|hits|dets] \
+    [--seed int] \
+    [--shots int] \
+    [--skip_loop_folding] \
+    [--skip_reference_sample]
+```
+
+**Flags**
+
+| Flag | Description |
+|---|---|
+| `--in filepath` | Path to the Stim circuit file. Defaults to stdin. |
+| `--out filepath` | Path to write the sampled measurement data. Defaults to stdout. |
+| `--out_format 01\|b8\|r8\|ptb64\|hits\|dets` | Format for the output data. Defaults to `01`. |
+| `--seed int` | Non-negative 64-bit integer seed for the random number generator. Results are reproducible only within the same Stim version and machine architecture. |
+| `--shots int` | Number of samples to take. Defaults to 1. Maximum is 10^18. |
+| `--skip_loop_folding` | Disables loop-folding optimization when computing the reference sample. Useful for circuits like honeycomb codes where the folding analysis can be slower than direct simulation. |
+| `--skip_reference_sample` | Assumes all-zero measurements are a valid noiseless circuit output. Skips the stabilizer tableau reference simulation, improving performance. Only safe when the assumption holds. |
+
+**Examples**
+
+```bash
+# Sample 5 shots from a circuit via stdin
+stim sample --shots 5 < example_circuit.stim
+```
+
+```bash
+# Sample from a file, writing output in dets format
+stim sample \
+    --in example_circuit.stim \
+    --out_format dets
+```
+
+```bash
+# Sample to a binary file with a fixed seed
+stim sample \
+    --in example_circuit.stim \
+    --shots 100000 \
+    --seed 12345 \
+    --out_format b8 \
+    --out samples.b8
+```
+
+</Accordion>
+
+<Accordion title="stim sample_dem" id="sample_dem">
+
+Samples detection events directly from a detector error model (DEM), bypassing circuit simulation entirely. Supports recording which errors occurred and replaying them later to deterministically reproduce or study specific error patterns.
+
+**Synopsis**
+
+```bash
+stim sample_dem \
+    [--err_out filepath] \
+    [--err_out_format 01|b8|r8|ptb64|hits|dets] \
+    [--in filepath] \
+    [--obs_out filepath] \
+    [--obs_out_format 01|b8|r8|ptb64|hits|dets] \
+    [--out filepath] \
+    [--out_format 01|b8|r8|ptb64|hits|dets] \
+    [--replay_err_in filepath] \
+    [--replay_err_in_format 01|b8|r8|ptb64|hits|dets] \
+    [--seed int] \
+    [--shots int]
+```
+
+**Flags**
+
+| Flag | Description |
+|---|---|
+| `--err_out filepath` | Path to write a record of which DEM errors occurred in each shot. Can be fed back into `--replay_err_in` to reproduce or modify the errors. |
+| `--err_out_format 01\|b8\|r8\|ptb64\|hits\|dets` | Format for the error record output. Defaults to `01`. Irrelevant unless `--err_out` is specified. |
+| `--in filepath` | Path to the detector error model file. Defaults to stdin. |
+| `--obs_out filepath` | Path to write observable flip data (which logical observables were corrupted) separately from detection events. |
+| `--obs_out_format 01\|b8\|r8\|ptb64\|hits\|dets` | Format for the observable output. Defaults to `01`. |
+| `--out filepath` | Path to write the sampled detection event data. Defaults to stdout. |
+| `--out_format 01\|b8\|r8\|ptb64\|hits\|dets` | Format for the detection event output. Defaults to `01`. |
+| `--replay_err_in filepath` | Path to a file of previously recorded error data. When specified, errors are driven by the file instead of sampled randomly. |
+| `--replay_err_in_format 01\|b8\|r8\|ptb64\|hits\|dets` | Format of the error replay input. Defaults to `01`. Irrelevant unless `--replay_err_in` is specified. |
+| `--seed int` | Non-negative 64-bit integer seed for the random number generator. Results are reproducible only within the same Stim version and machine architecture. |
+| `--shots int` | Number of samples to take. Defaults to 1. Maximum is 10^18. |
+
+**Examples**
+
+```bash
+# Sample 5 shots from a DEM, writing detection events and observable flips
+stim sample_dem \
+    --shots 5 \
+    --in example.dem \
+    --out dets.01 \
+    --out_format 01 \
+    --obs_out obs_flips.01 \
+    --obs_out_format 01
+```
+
+```bash
+# Record which errors occurred while sampling
+stim sample_dem \
+    --shots 1000 \
+    --in example.dem \
+    --out detections.01 \
+    --obs_out observables.01 \
+    --err_out errors_that_occurred.01
+```
+
+```bash
+# Replay a specific set of errors deterministically
+stim sample_dem \
+    --in example.dem \
+    --replay_err_in errors_that_occurred.01 \
+    --out detections_replayed.01 \
+    --obs_out observables_replayed.01
+```
+
+</Accordion>
+
+</AccordionGroup>
+
+<Tip>
+All `--in_format` and `--out_format` flags accept the same six values: `01` (dense human-readable), `b8` (bit-packed binary), `r8` (run-length binary), `ptb64` (SIMD-optimized binary), `hits` (sparse human-readable), and `dets` (sparse with type prefixes). For a full description of each format, see the [Stim result formats reference](https://github.com/quantumlib/Stim/blob/main/doc/result_formats.md).
+</Tip>

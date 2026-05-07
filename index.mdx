@@ -1,133 +1,111 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
-icon: 'star'
+title: "Stim: Fast Stabilizer Circuit Simulator"
+description: "Stim is a high-performance library for simulating quantum stabilizer circuits, built for quantum error correction research at scale."
 ---
 
-## Setting up
+Stim is a high-performance Python and C++ library for simulating and analyzing quantum stabilizer circuits. It is designed for quantum error correction (QEC) research, enabling researchers to simulate large circuits with thousands of qubits and millions of operations at kilohertz sampling rates using vectorized AVX instructions.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get Stim installed and run your first stabilizer circuit simulation in minutes.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Installation" icon="download" href="/installation">
+    Install Stim via pip, build from source as a C++ library, or use the CLI binary.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Core Concepts" icon="book" href="/concepts/circuits">
+    Learn about stabilizer circuits, Pauli strings, tableaus, and detector error models.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Python API Reference" icon="code" href="/reference/python/circuit">
+    Full reference for stim.Circuit, stim.Tableau, stim.PauliString, and all simulators.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Why Stim?
 
-Everything you need to create world-class documentation.
+Stim makes three core algorithmic improvements over prior stabilizer simulators that make it exceptionally fast:
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
+<CardGroup cols={3}>
+  <Card title="Vectorized Code" icon="microchip">
+    Hot loops use 256-bit AVX instructions. Stim can multiply Pauli strings with 100 billion terms per second.
   </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
+  <Card title="Reference Frame Sampling" icon="bolt">
+    Bulk sampling uses a single reference run, then derives additional samples by propagating simulated errors — constant cost per gate.
   </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
+  <Card title="Inverted Tableau" icon="table">
+    Tracking the inverse stabilizer tableau makes redundant measurements (common in QEC) run in linear time instead of quadratic.
   </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+</CardGroup>
 
-## Make your content agent ready
+## Get started
 
-Make your docs work for humans and AI agents alike.
+<Steps>
+  <Step title="Install Stim">
+    Install the Python package with pip:
+    ```bash
+    pip install stim
+    ```
+  </Step>
+  <Step title="Build a circuit">
+    Define a stabilizer circuit using Stim's circuit language:
+    ```python
+    import stim
 
-<Columns cols={2}>
-  <Card
-    title="Prompt component"
-    icon="robot"
-    href="/agent-ready/prompt"
-  >
-    Embed shareable AI prompts readers can copy or open in Cursor.
-  </Card>
-  <Card
-    title="Visibility"
-    icon="eye"
-    href="/agent-ready/visibility"
-  >
-    Show different content to humans and agents reading your docs.
-  </Card>
-  <Card
-    title="Contextual menu"
-    icon="bolt"
-    href="/agent-ready/contextual"
-  >
-    Give readers one-click access to Claude, ChatGPT, Cursor, and more.
-  </Card>
-  <Card
-    title="AI coding tools"
-    icon="wand-magic-sparkles"
-    href="/ai-tools/claude-code"
-  >
-    Set up Claude Code, Cursor, or Windsurf with Mintlify's skill.
-  </Card>
-</Columns>
+    circuit = stim.Circuit("""
+        H 0
+        CNOT 0 1
+        M 0 1
+    """)
+    ```
+  </Step>
+  <Step title="Sample measurements">
+    Compile a sampler and collect measurement shots:
+    ```python
+    sampler = circuit.compile_sampler()
+    shots = sampler.sample(1000)
+    print(shots[:5])
+    # [[False, False], [True, True], ...]
+    ```
+  </Step>
+  <Step title="Analyze errors">
+    Convert a noisy circuit into a detector error model for decoder configuration:
+    ```python
+    noisy = stim.Circuit("""
+        X_ERROR(0.001) 0 1
+        H 0
+        CNOT 0 1
+        DEPOLARIZE1(0.001) 0 1
+        M 0 1
+        DETECTOR rec[-1] rec[-2]
+    """)
+    dem = noisy.detector_error_model(decompose_errors=True)
+    print(dem)
+    ```
+  </Step>
+</Steps>
 
-## Need inspiration?
+## Explore the documentation
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<CardGroup cols={2}>
+  <Card title="Sampling guide" icon="chart-bar" href="/guides/sampling">
+    Learn measurement sampling, detector sampling, and bulk data collection workflows.
+  </Card>
+  <Card title="Detector error models" icon="diagram-project" href="/guides/detector-error-models">
+    Convert noisy circuits into Tanner graphs for configuring decoders.
+  </Card>
+  <Card title="Sinter: QEC sampling" icon="server" href="/guides/sinter">
+    Run parallel Monte Carlo sampling across CPU cores with the Sinter companion tool.
+  </Card>
+  <Card title="Gate reference" icon="list" href="/reference/gates">
+    Browse all supported Clifford gates, noise channels, and measurement operations.
+  </Card>
+  <Card title="Command line" icon="terminal" href="/reference/cli/overview">
+    Use Stim's CLI for scripting, pipeline integration, and quick analysis.
+  </Card>
+  <Card title="File formats" icon="file-code" href="/reference/file-format-stim">
+    Understand the .stim circuit format and .dem detector error model format.
+  </Card>
+</CardGroup>
+
+<Note>
+  Stim only supports Clifford (stabilizer) operations. There is no support for non-Clifford gates like T gates or Toffoli gates. For non-Pauli noise, drive a `stim.TableauSimulator` manually.
+</Note>

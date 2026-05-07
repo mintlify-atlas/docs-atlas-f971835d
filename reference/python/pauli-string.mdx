@@ -1,0 +1,402 @@
+---
+title: "stim.PauliString — multi-qubit Pauli operators"
+description: "API reference for stim.PauliString: create Pauli operators, multiply, check commutativity, conjugate by Clifford operations, and convert to numpy arrays."
+---
+
+`stim.PauliString` represents an element of the n-qubit Pauli group: a tensor product of single-qubit Pauli operators (I, X, Y, Z) together with a sign (+1, −1, +i, or −i). Pauli strings appear throughout Stim as stabilizer generators, error mechanisms, and observable definitions. They support arithmetic, commutativity checks, conjugation by Clifford operations, and conversion to/from numpy arrays.
+
+## Constructor
+
+<AccordionGroup>
+  <Accordion title="stim.PauliString(arg) — from text or length">
+    Creates a Pauli string from a string description or an integer specifying the number of identity qubits.
+
+    ```python
+    def __init__(
+        self,
+        arg: Union[int, str, stim.PauliString, Iterable[int]],
+        /,
+    ) -> None
+    ```
+
+    **Accepted formats**
+
+    | Form | Example | Result |
+    |------|---------|--------|
+    | Integer length | `stim.PauliString(5)` | `+_____` (all identity) |
+    | Pauli string text | `stim.PauliString("XYZ")` | `+XYZ` |
+    | Signed text | `stim.PauliString("-iXYZ")` | `-iXYZ` |
+    | Indexed notation | `stim.PauliString("X3*Z5")` | Paulis at specific qubit indices |
+    | Integer list | `stim.PauliString([1, 2, 3])` | `+XYZ` (0=I, 1=X, 2=Y, 3=Z) |
+
+    ```python
+    import stim
+
+    p1 = stim.PauliString("XYZ")
+    p2 = stim.PauliString("-iX100*Z200")
+    p3 = stim.PauliString(5)  # +_____
+    ```
+  </Accordion>
+
+  <Accordion title="stim.PauliString.random() — uniformly random">
+    Samples a uniformly random Hermitian Pauli string (sign ±1 by default).
+
+    ```python
+    @staticmethod
+    def random(
+        num_qubits: int,
+        *,
+        allow_imaginary: bool = False,
+    ) -> stim.PauliString
+    ```
+
+    **Parameters**
+
+    | Name | Type | Description |
+    |------|------|-------------|
+    | `num_qubits` | `int` | Number of qubit positions in the result. |
+    | `allow_imaginary` | `bool` | When `True`, sign may be `1j` or `-1j` (non-Hermitian). |
+
+    ```python
+    import stim
+
+    p = stim.PauliString.random(10)
+    print(len(p))        # 10
+    print(p.sign in [+1, -1])  # True
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Indexing and slicing
+
+<AccordionGroup>
+  <Accordion title="__getitem__ — read individual Paulis">
+    Returns a Pauli string element at the given index. Integers are returned using the encoding 0=I, 1=X, 2=Y, 3=Z.
+
+    ```python
+    def __getitem__(self, index_or_slice: Union[int, slice]) -> Union[int, stim.PauliString]
+    ```
+
+    ```python
+    import stim
+
+    p = stim.PauliString("XYZXYZ")
+    print(p[0])    # 1 (X)
+    print(p[1])    # 2 (Y)
+    print(p[2:4])  # +YZ (PauliString slice)
+    print(p[-1])   # 3 (Z)
+    ```
+  </Accordion>
+
+  <Accordion title="__setitem__ — write individual Paulis">
+    Overwrites a Pauli at the given index. Accepts an integer (0=I, 1=X, 2=Y, 3=Z) or a character from `'_IXYZ'`.
+
+    ```python
+    def __setitem__(self, index: int, new_pauli: Union[int, str]) -> None
+    ```
+
+    ```python
+    import stim
+
+    p = stim.PauliString(4)
+    p[0] = 'X'
+    p[1] = 2  # Y
+    p[2] = 'Z'
+    print(p)  # +XYZ_
+    ```
+  </Accordion>
+
+  <Accordion title="pauli_indices() — non-identity positions">
+    Returns the sorted list of indices of non-identity (or specified) Paulis.
+
+    ```python
+    def pauli_indices(self, included_paulis: str = "XYZ") -> List[int]
+    ```
+
+    ```python
+    import stim
+
+    p = stim.PauliString("_____X___Y____Z___")
+    p.pauli_indices()       # [5, 9, 14]
+    p.pauli_indices("XZ")   # [5, 14]
+    p.pauli_indices("Y")    # [9]
+    ```
+  </Accordion>
+
+  <Accordion title="weight — number of non-identity terms">
+    Returns the number of non-identity Pauli terms (the Hamming weight of the Pauli support).
+
+    ```python
+    @property
+    def weight(self) -> int
+    ```
+
+    ```python
+    import stim
+
+    stim.PauliString("+XYZ").weight   # 3
+    stim.PauliString("+___").weight   # 0
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Arithmetic
+
+<AccordionGroup>
+  <Accordion title="__mul__ — Pauli multiplication and tensor power">
+    Multiplies two Pauli strings term-by-term, or multiplies the sign by a complex unit, or repeats (tensor power) by a non-negative integer.
+
+    ```python
+    def __mul__(self, rhs: Union[stim.PauliString, complex, int]) -> stim.PauliString
+    def __rmul__(self, lhs: Union[stim.PauliString, complex, int]) -> stim.PauliString
+    ```
+
+    ```python
+    import stim
+
+    # Term-by-term multiplication
+    stim.PauliString("X") * stim.PauliString("Y")   # +iZ
+    stim.PauliString("XXXX") * stim.PauliString("_XYZ")  # +X_ZY
+
+    # Sign multiplication
+    -1 * stim.PauliString("X")   # -X
+    1j * stim.PauliString("X")   # +iX
+
+    # Tensor repetition
+    3 * stim.PauliString("X")    # +XXX
+    2 * stim.PauliString("iX")   # -XX  (i^2 = -1)
+    ```
+  </Accordion>
+
+  <Accordion title="__add__ — concatenation">
+    Concatenates (tensor-products) two Pauli strings.
+
+    ```python
+    def __add__(self, rhs: stim.PauliString) -> stim.PauliString
+    ```
+
+    ```python
+    import stim
+
+    stim.PauliString("XY") + stim.PauliString("ZI")  # +XYZI
+    ```
+  </Accordion>
+
+  <Accordion title="__neg__, __pos__ — sign flip">
+    Negates or copies the sign of the Pauli string.
+
+    ```python
+    def __neg__(self) -> stim.PauliString
+    def __pos__(self) -> stim.PauliString
+    ```
+
+    ```python
+    import stim
+
+    -stim.PauliString("XYZ")   # -XYZ
+    +stim.PauliString("-XYZ")  # -XYZ (returns copy)
+    ```
+  </Accordion>
+
+  <Accordion title="__truediv__ — divide by complex unit">
+    Divides the sign by a complex unit (1, -1, 1j, or -1j).
+
+    ```python
+    def __truediv__(self, rhs: complex) -> stim.PauliString
+    ```
+
+    ```python
+    import stim
+
+    stim.PauliString("X") / 1j  # -iX
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Commutativity
+
+<AccordionGroup>
+  <Accordion title="commutes() — commutativity check">
+    Determines whether two Pauli strings commute. Two Paulis commute if they have an even number of positions where both are non-identity and different.
+
+    ```python
+    def commutes(self, other: stim.PauliString) -> bool
+    ```
+
+    ```python
+    import stim
+
+    xx = stim.PauliString("XX")
+    xx.commutes(stim.PauliString("ZZ"))   # True  (XX and ZZ commute)
+    xx.commutes(stim.PauliString("XZ"))   # False (XX and XZ anti-commute)
+    xx.commutes(stim.PauliString("ZX"))   # False
+    xx.commutes(stim.PauliString("ZZ"))   # True
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Sign
+
+<AccordionGroup>
+  <Accordion title="sign — read and write the sign">
+    The global phase factor of the Pauli string. Can be `+1`, `-1`, `1j`, or `-1j`.
+
+    ```python
+    @property
+    def sign(self) -> complex
+    @sign.setter
+    def sign(self, value: complex) -> None
+    ```
+
+    ```python
+    import stim
+
+    p = stim.PauliString("XYZ")
+    print(p.sign)  # (1+0j)
+
+    p.sign = -1
+    print(p)       # -XYZ
+
+    stim.PauliString("iX").sign   # 1j
+    stim.PauliString("-iX").sign  # -1j
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Conjugation by Clifford operations
+
+<AccordionGroup>
+  <Accordion title="after() — conjugate by an operation">
+    Returns the Pauli string equivalent to this one after the given Clifford operation. Computes `C * P * C^-1`.
+
+    ```python
+    def after(
+        self,
+        operation: Union[stim.Circuit, stim.Tableau, stim.CircuitInstruction],
+        targets: Optional[Iterable[int]] = None,
+    ) -> stim.PauliString
+    ```
+
+    The `targets` argument is required when `operation` is a `stim.Tableau`.
+
+    ```python
+    import stim
+
+    p = stim.PauliString("_XYZ")
+    p.after(stim.CircuitInstruction("H", [1]))          # +_ZYZ
+    p.after(stim.Tableau.from_named_gate('CZ'), targets=[0, 1])  # +ZXYZ
+    ```
+  </Accordion>
+
+  <Accordion title="before() — anti-conjugate by an operation">
+    Returns the Pauli string that, after the given Clifford operation, equals this one. Computes `C^-1 * P * C`.
+
+    ```python
+    def before(
+        self,
+        operation: Union[stim.Circuit, stim.Tableau, stim.CircuitInstruction],
+        targets: Optional[Iterable[int]] = None,
+    ) -> stim.PauliString
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Tableau and simulator interop
+
+<AccordionGroup>
+  <Accordion title="to_tableau() — as a Clifford operation">
+    Converts the Pauli string into a `stim.Tableau` representing the Clifford operation that applies each Pauli to the corresponding qubit. The global phase is lost.
+
+    ```python
+    def to_tableau(self) -> stim.Tableau
+    ```
+
+    ```python
+    import stim
+
+    p = stim.PauliString("ZZ")
+    t = p.to_tableau()
+    # t represents the operation: Z on qubit 0, Z on qubit 1
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Iteration
+
+<AccordionGroup>
+  <Accordion title="stim.PauliString.iter_all() — enumerate matching strings">
+    Returns an iterator over all Pauli strings matching specified weight and Pauli type constraints.
+
+    ```python
+    @staticmethod
+    def iter_all(
+        num_qubits: int,
+        *,
+        min_weight: int = 0,
+        max_weight: object = None,
+        allowed_paulis: str = 'XYZ',
+    ) -> stim.PauliStringIterator
+    ```
+
+    ```python
+    import stim
+
+    for p in stim.PauliString.iter_all(3, min_weight=1, max_weight=2, allowed_paulis="XZ"):
+        print(p)
+    # +X__
+    # +Z__
+    # +_X_
+    # ... (all weight-1 and weight-2 X/Z strings on 3 qubits)
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Numpy interop
+
+<Tabs>
+  <Tab title="from_numpy">
+    ```python
+    @staticmethod
+    def from_numpy(
+        *,
+        xs: np.ndarray,
+        zs: np.ndarray,
+        sign: Union[int, float, complex] = +1,
+        num_qubits: Optional[int] = None,
+    ) -> stim.PauliString
+    ```
+
+    Creates a Pauli string from X-bit and Z-bit numpy arrays using the encoding: x=0,z=0→I; x=1,z=0→X; x=1,z=1→Y; x=0,z=1→Z.
+  </Tab>
+  <Tab title="to_numpy">
+    ```python
+    def to_numpy(self, *, bit_packed: bool = False) -> Tuple[np.ndarray, np.ndarray]
+    ```
+
+    Returns `(xs, zs)` boolean arrays encoding each Pauli using the same XZ encoding.
+  </Tab>
+  <Tab title="from_unitary_matrix">
+    ```python
+    @staticmethod
+    def from_unitary_matrix(
+        matrix: Iterable[Iterable[Union[int, float, complex]]],
+        *,
+        endian: Literal["little", "big"] = 'little',
+        unsigned: bool = False,
+    ) -> stim.PauliString
+    ```
+
+    Creates a Pauli string from its unitary matrix. Raises `ValueError` if the matrix is not a valid Pauli group element.
+  </Tab>
+  <Tab title="to_unitary_matrix">
+    ```python
+    def to_unitary_matrix(
+        self,
+        *,
+        endian: Literal["little", "big"],
+    ) -> np.ndarray[np.complex64]
+    ```
+
+    Returns the `(2^n, 2^n)` unitary matrix of this Pauli string.
+  </Tab>
+</Tabs>

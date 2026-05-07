@@ -1,0 +1,68 @@
+---
+title: "Stim: High-Performance Stabilizer Circuit Simulator"
+description: "Stim simulates quantum stabilizer circuits at kilohertz rates, with semi-automatic decoder configuration for large-scale quantum error correction research."
+---
+
+Stim is an open-source tool for high-performance simulation and analysis of quantum stabilizer circuits, with a focus on quantum error correction (QEC). It is primarily used as a Python package (`pip install stim`), though it is also available as a command-line tool and a C++ library. Stim can sample circuits with thousands of qubits and millions of operations at kilohertz rates, and can automatically derive detector error models (Tanner graphs) from annotated noisy circuits to configure decoders.
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Really fast simulation" icon="bolt">
+    `stim.Circuit.compile_sampler()` performs a brief analysis and produces a sampler that collects shots at kilohertz rates — even for circuits with thousands of qubits and millions of operations.
+  </Card>
+  <Card title="Semi-automatic decoder configuration" icon="diagram-project">
+    `stim.Circuit.detector_error_model()` converts a noisy circuit into a detector error model (a Tanner graph). Pass `decompose_errors=True` to get suggested decompositions of hyper errors into graphlike errors for matching-based decoders.
+  </Card>
+  <Card title="Stabilizer building blocks" icon="cubes">
+    Useful primitives for working with stabilizers directly: `stim.PauliString`, `stim.Tableau`, and `stim.TableauSimulator`.
+  </Card>
+  <Card title="Multiple interfaces" icon="terminal">
+    Use Stim as a Python package, a command-line tool, or a C++ library. The Python and CLI APIs guarantee backwards compatibility within a major version.
+  </Card>
+</CardGroup>
+
+## How Stim achieves its speed
+
+Stim makes three core algorithmic improvements over previous stabilizer simulators:
+
+<CardGroup cols={3}>
+  <Card title="Vectorized code" icon="microchip">
+    Hot loops use 256-bit AVX instructions. Stim can multiply Pauli strings with 100 billion terms per second.
+  </Card>
+  <Card title="Reference frame sampling" icon="frame">
+    Bulk sampling uses a general stabilizer simulator only for an initial reference sample, then cheaply derives further samples by propagating simulated errors diffed against that reference — constant cost per gate, not linear or quadratic.
+  </Card>
+  <Card title="Inverted stabilizer tableau" icon="table">
+    Stim tracks the inverse of the stabilizer tableau. This makes measurements that commute with current stabilizers take linear time instead of quadratic time — a significant advantage in QEC circuits where most measurements are redundant.
+  </Card>
+</CardGroup>
+
+## Design philosophy
+
+Stim is built around three principles:
+
+- **Performance is king.** The goal is not to be fast *enough*, but to be fast in an absolute sense. Stim is implemented in C++ with heavy use of SIMD intrinsics; the Python package is a thin binding over that core.
+- **Bottom up.** Stim acts like an assembly language: a straightforward, low-level layer on which higher-level tools can be built. Users define circuits at the gate level; Stim does not impose higher-level abstractions.
+- **Backwards compatibility.** The Python package uses semantic versioning. Within a major version (`1.X`), Stim guarantees backwards compatibility of both its Python API and its command-line API.
+
+<Note>
+  Stim only supports Clifford (stabilizer) operations. There is no support for non-Clifford gates such as T gates or Toffoli gates. Additionally, `stim.Circuit` only supports Pauli noise channels — for more complex noise models (such as amplitude decay) you must drive a `stim.TableauSimulator` manually. `stim.Circuit` also only supports single-control Pauli feedback; multi-control or non-Pauli feedback likewise requires `stim.TableauSimulator`.
+</Note>
+
+## Explore the documentation
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Install Stim and run your first stabilizer circuit simulation in minutes.
+  </Card>
+  <Card title="Circuits" icon="book" href="/concepts/circuits">
+    Learn how Stim circuits are constructed, annotated with detectors, and compiled for sampling.
+  </Card>
+  <Card title="Python API — Circuit" icon="code" href="/reference/python/circuit">
+    Full reference for `stim.Circuit`, including `compile_sampler`, `compile_detector_sampler`, and `detector_error_model`.
+  </Card>
+  <Card title="Command line reference" icon="terminal" href="/reference/cli/overview">
+    Use Stim's CLI for scripting, pipeline integration, and quick one-off analysis.
+  </Card>
+</CardGroup>

@@ -1,0 +1,495 @@
+---
+title: "stim.Tableau — Clifford operation tracking"
+description: "API reference for stim.Tableau, which represents Clifford operations by tracking how they conjugate Pauli generators into composite Pauli products."
+---
+
+`stim.Tableau` represents a Clifford operation by explicitly recording how the operation conjugates each single-qubit Pauli generator (X and Z for each qubit) into a product of Paulis. This is the standard stabilizer tableau representation from Aaronson and Gottesman (2004). Tableaux support composition, inversion, and conversion to and from circuits. They are the internal state tracked by `stim.TableauSimulator`.
+
+## Constructor
+
+<AccordionGroup>
+  <Accordion title="stim.Tableau(num_qubits) — identity tableau">
+    Creates the identity tableau acting on `num_qubits` qubits.
+
+    ```python
+    def __init__(self, num_qubits: int) -> None
+    ```
+
+    ```python
+    import stim
+
+    t = stim.Tableau(3)
+    print(t)
+    # +-xz-xz-xz-
+    # | ++ ++ ++
+    # | XZ __ __
+    # | __ XZ __
+    # | __ __ XZ
+    ```
+  </Accordion>
+
+  <Accordion title="stim.Tableau.random() — uniformly random Clifford">
+    Samples a uniformly random Clifford operation as a tableau.
+
+    ```python
+    @staticmethod
+    def random(num_qubits: int) -> stim.Tableau
+    ```
+
+    ```python
+    import stim
+
+    t = stim.Tableau.random(4)
+    t_inv = t.inverse()
+    identity = stim.Tableau(4)
+    assert t * t_inv == identity
+    ```
+  </Accordion>
+
+  <Accordion title="stim.Tableau.from_named_gate() — standard gates">
+    Returns the tableau of a named Clifford gate such as `"H"`, `"S"`, `"CNOT"`, `"CZ"`, `"SWAP"`, etc.
+
+    ```python
+    @staticmethod
+    def from_named_gate(name: str) -> stim.Tableau
+    ```
+
+    ```python
+    import stim
+
+    h = stim.Tableau.from_named_gate("H")
+    cnot = stim.Tableau.from_named_gate("CNOT")
+    s = stim.Tableau.from_named_gate("S")
+    s_dag = stim.Tableau.from_named_gate("S_DAG")
+    ```
+  </Accordion>
+
+  <Accordion title="stim.Tableau.from_circuit() — compile circuit to tableau">
+    Converts a Clifford circuit into its equivalent tableau.
+
+    ```python
+    @staticmethod
+    def from_circuit(
+        circuit: stim.Circuit,
+        *,
+        ignore_noise: bool = False,
+        ignore_measurement: bool = False,
+        ignore_reset: bool = False,
+    ) -> stim.Tableau
+    ```
+
+    **Parameters**
+
+    | Name | Type | Description |
+    |------|------|-------------|
+    | `circuit` | `stim.Circuit` | The circuit to compile. |
+    | `ignore_noise` | `bool` | Skip noise instructions instead of raising. |
+    | `ignore_measurement` | `bool` | Skip measurements instead of raising. |
+    | `ignore_reset` | `bool` | Skip resets instead of raising. |
+
+    ```python
+    import stim
+
+    t = stim.Tableau.from_circuit(stim.Circuit('''
+        H 0
+        CNOT 0 1
+    '''))
+    print(t.x_output(0))  # +Z_
+    print(t.z_output(0))  # +XX
+    ```
+  </Accordion>
+
+  <Accordion title="stim.Tableau.from_conjugated_generators() — explicit specification">
+    Creates a tableau from explicit lists of X and Z outputs.
+
+    ```python
+    @staticmethod
+    def from_conjugated_generators(
+        *,
+        xs: List[stim.PauliString],
+        zs: List[stim.PauliString],
+    ) -> stim.Tableau
+    ```
+
+    ```python
+    import stim
+
+    # Build CNOT manually
+    cnot = stim.Tableau.from_conjugated_generators(
+        xs=[stim.PauliString("+XX"), stim.PauliString("+_X")],
+        zs=[stim.PauliString("+Z_"), stim.PauliString("+ZZ")],
+    )
+    ```
+  </Accordion>
+
+  <Accordion title="stim.Tableau.from_stabilizers() — from stabilizer state">
+    Creates the tableau of a stabilizer state specified by its stabilizer generators.
+
+    ```python
+    @staticmethod
+    def from_stabilizers(
+        stabilizers: Iterable[stim.PauliString],
+        *,
+        allow_redundant: bool = False,
+        allow_underconstrained: bool = False,
+    ) -> stim.Tableau
+    ```
+
+    ```python
+    import stim
+
+    # Bell state |Φ+⟩ has stabilizers XX and ZZ
+    t = stim.Tableau.from_stabilizers([
+        stim.PauliString("XX"),
+        stim.PauliString("ZZ"),
+    ])
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Composition
+
+<AccordionGroup>
+  <Accordion title="prepend() — apply gate before existing content">
+    Prepends an operation's effect into this tableau, mutating it in place. The prepended gate is applied before the current tableau.
+
+    ```python
+    def prepend(self, gate: stim.Tableau, targets: Sequence[int]) -> None
+    ```
+
+    **Parameters**
+
+    | Name | Type | Description |
+    |------|------|-------------|
+    | `gate` | `stim.Tableau` | The tableau of the operation to prepend. |
+    | `targets` | `Sequence[int]` | The qubit indices the gate acts on within this tableau. |
+
+    ```python
+    import stim
+
+    t = stim.Tableau(2)
+    h = stim.Tableau.from_named_gate("H")
+    cnot = stim.Tableau.from_named_gate("CNOT")
+    t.prepend(h, [0])
+    t.prepend(cnot, [0, 1])
+    ```
+  </Accordion>
+
+  <Accordion title="append() — apply gate after existing content">
+    Appends an operation's effect into this tableau, mutating it in place. The appended gate is applied after the current tableau.
+
+    ```python
+    def append(self, gate: stim.Tableau, targets: Sequence[int]) -> None
+    ```
+
+    ```python
+    import stim
+
+    # Build SWAP = CNOT(0,1) * CNOT(1,0) * CNOT(0,1)
+    cnot = stim.Tableau.from_named_gate("CNOT")
+    t = stim.Tableau(2)
+    t.append(cnot, [0, 1])
+    t.append(cnot, [1, 0])
+    t.append(cnot, [0, 1])
+    assert t == stim.Tableau.from_named_gate("SWAP")
+    ```
+  </Accordion>
+
+  <Accordion title="__mul__ — tableau product">
+    Returns `T1 * T2`, the composition where `T2` is applied first, then `T1`.
+
+    ```python
+    def __mul__(self, rhs: stim.Tableau) -> stim.Tableau
+    ```
+
+    ```python
+    import stim
+
+    t1 = stim.Tableau.random(4)
+    t2 = stim.Tableau.random(4)
+    t3 = t1 * t2  # apply t2 first, then t1
+    p = stim.PauliString.random(4)
+    assert t3(p) == t1(t2(p))
+    ```
+  </Accordion>
+
+  <Accordion title="then() — sequential composition">
+    Returns a tableau that applies `self` first, then the given `second` tableau.
+
+    ```python
+    def then(self, second: stim.Tableau) -> stim.Tableau
+    ```
+
+    ```python
+    import stim
+
+    h = stim.Tableau.from_named_gate("H")
+    s = stim.Tableau.from_named_gate("S")
+    hs = h.then(s)  # first H, then S
+    ```
+  </Accordion>
+
+  <Accordion title="__add__ — direct sum">
+    Returns the direct sum (block-diagonal concatenation) of two tableaus.
+
+    ```python
+    def __add__(self, rhs: stim.Tableau) -> stim.Tableau
+    ```
+
+    ```python
+    import stim
+
+    h = stim.Tableau.from_named_gate("H")
+    s = stim.Tableau.from_named_gate("S")
+    hs_tensor = h + s  # H on qubit 0, S on qubit 1
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Inversion
+
+<AccordionGroup>
+  <Accordion title="inverse() — compute the inverse tableau">
+    Returns the inverse tableau `T^-1` such that `T * T^-1 = identity`.
+
+    ```python
+    def inverse(self, *, unsigned: bool = False) -> stim.Tableau
+    ```
+
+    **Parameters**
+
+    | Name | Type | Description |
+    |------|------|-------------|
+    | `unsigned` | `bool` | When `True`, skips sign computation (O(n²) → O(n)). Use when only Pauli terms are needed. |
+
+    ```python
+    import stim
+
+    s = stim.Tableau.from_named_gate("S")
+    s_dag = stim.Tableau.from_named_gate("S_DAG")
+    assert s.inverse() == s_dag
+
+    t = stim.Tableau.random(10)
+    assert t * t.inverse() == stim.Tableau(10)
+    ```
+  </Accordion>
+
+  <Accordion title="__pow__ — integer exponentiation">
+    Raises the tableau to an integer power. Supports negative exponents (equivalent to repeated inversion).
+
+    ```python
+    def __pow__(self, exponent: int) -> stim.Tableau
+    ```
+
+    ```python
+    import stim
+
+    s = stim.Tableau.from_named_gate("S")
+    assert s**4 == stim.Tableau(1)
+    assert s**-1 == stim.Tableau.from_named_gate("S_DAG")
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Querying Pauli transformations
+
+<AccordionGroup>
+  <Accordion title="x_output(), y_output(), z_output() — conjugated generators">
+    Returns the Pauli string that a given qubit's X, Y, or Z generator maps to under conjugation by this tableau.
+
+    ```python
+    def x_output(self, target: int) -> stim.PauliString
+    def y_output(self, target: int) -> stim.PauliString
+    def z_output(self, target: int) -> stim.PauliString
+    ```
+
+    ```python
+    import stim
+
+    h = stim.Tableau.from_named_gate("H")
+    print(h.x_output(0))  # +Z  (H maps X → Z)
+    print(h.z_output(0))  # +X  (H maps Z → X)
+
+    cnot = stim.Tableau.from_named_gate("CNOT")
+    print(cnot.x_output(0))  # +XX (CNOT maps X⊗I → X⊗X)
+    print(cnot.z_output(1))  # +ZZ (CNOT maps I⊗Z → Z⊗Z)
+    ```
+  </Accordion>
+
+  <Accordion title="x_output_pauli(), z_output_pauli() — single Pauli lookup">
+    Returns an integer identifying the Pauli (0=I, 1=X, 2=Y, 3=Z) at a specific output position. Runs in O(1) time.
+
+    ```python
+    def x_output_pauli(self, input_index: int, output_index: int) -> int
+    def y_output_pauli(self, input_index: int, output_index: int) -> int
+    def z_output_pauli(self, input_index: int, output_index: int) -> int
+    ```
+
+    ```python
+    import stim
+
+    cnot = stim.Tableau.from_named_gate("CNOT")
+    # cnot.x_output(0) == "+XX"
+    print(cnot.x_output_pauli(0, 0))  # 1 (X)
+    print(cnot.x_output_pauli(0, 1))  # 1 (X)
+    ```
+  </Accordion>
+
+  <Accordion title="inverse_x_output(), inverse_z_output() — inverse tableau query">
+    Conjugates a generator by the inverse tableau, without computing the full inverse.
+
+    ```python
+    def inverse_x_output(self, input_index: int, *, unsigned: bool = False) -> stim.PauliString
+    def inverse_z_output(self, input_index: int, *, unsigned: bool = False) -> stim.PauliString
+    ```
+  </Accordion>
+
+  <Accordion title="x_sign(), y_sign(), z_sign() — output sign only">
+    Returns only the sign (+1 or -1) of the conjugated generator. `x_sign` and `z_sign` run in O(1) time; `y_sign` runs in O(n) time.
+
+    ```python
+    def x_sign(self, target: int) -> int
+    def y_sign(self, target: int) -> int
+    def z_sign(self, target: int) -> int
+    ```
+
+    ```python
+    import stim
+
+    s_dag = stim.Tableau.from_named_gate("S_DAG")
+    s_dag.x_sign(0)  # -1 (S_DAG maps X → -Y)
+    ```
+  </Accordion>
+
+  <Accordion title="__call__ — conjugate a PauliString">
+    Conjugates a `stim.PauliString` by this tableau's Clifford operation, returning `C * P * C^-1`.
+
+    ```python
+    def __call__(self, pauli_string: stim.PauliString) -> stim.PauliString
+    ```
+
+    ```python
+    import stim
+
+    cnot = stim.Tableau.from_named_gate("CNOT")
+    p = stim.PauliString("XX")
+    print(cnot(p))  # +X_
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Circuit conversion
+
+<AccordionGroup>
+  <Accordion title="to_circuit() — decompose into gates">
+    Converts the tableau into an equivalent Clifford circuit.
+
+    ```python
+    def to_circuit(
+        self,
+        method: Literal["elimination", "graph_state"] = 'elimination',
+    ) -> stim.Circuit
+    ```
+
+    ```python
+    import stim
+
+    t = stim.Tableau.random(5)
+    circuit = t.to_circuit()
+    assert stim.Tableau.from_circuit(circuit) == t
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Other constructors
+
+<Tabs>
+  <Tab title="from_unitary_matrix">
+    ```python
+    @staticmethod
+    def from_unitary_matrix(
+        matrix: Iterable[Iterable[float]],
+        *,
+        endian: Literal["little", "big"] = 'little',
+    ) -> stim.Tableau
+    ```
+
+    Creates a tableau from the unitary matrix of a Clifford operation. Raises `ValueError` if the matrix is not Clifford.
+  </Tab>
+  <Tab title="from_state_vector">
+    ```python
+    @staticmethod
+    def from_state_vector(
+        state_vector: Iterable[float],
+        *,
+        endian: Literal["little", "big"],
+    ) -> stim.Tableau
+    ```
+
+    Creates the stabilizer tableau of the stabilizer state with the given amplitude vector.
+  </Tab>
+  <Tab title="from_numpy">
+    ```python
+    @staticmethod
+    def from_numpy(
+        *,
+        x2x: np.ndarray,
+        x2z: np.ndarray,
+        z2x: np.ndarray,
+        z2z: np.ndarray,
+        x_signs: Optional[np.ndarray] = None,
+        z_signs: Optional[np.ndarray] = None,
+    ) -> stim.Tableau
+    ```
+
+    Creates a tableau from the four binary coupling matrices in the Aaronson–Gottesman representation.
+  </Tab>
+  <Tab title="iter_all">
+    ```python
+    @staticmethod
+    def iter_all(num_qubits: int) -> stim.TableauIterator
+    ```
+
+    Returns an iterator over all distinct `n`-qubit Clifford operations. For `n=1` this yields 24 tableaus.
+  </Tab>
+</Tabs>
+
+## Output representations
+
+<AccordionGroup>
+  <Accordion title="to_stabilizers() — Z output generators">
+    Returns the stabilizer generators (Z outputs) of the tableau, optionally in canonical form.
+
+    ```python
+    def to_stabilizers(self, *, canonicalize: bool = False) -> List[stim.PauliString]
+    ```
+  </Accordion>
+
+  <Accordion title="to_state_vector() — amplitude vector">
+    Returns the state vector produced by applying this tableau to `|0...0⟩`. Requires O(n·2ⁿ) time.
+
+    ```python
+    def to_state_vector(
+        self,
+        *,
+        endian: Literal["little", "big"] = 'little',
+    ) -> np.ndarray
+    ```
+  </Accordion>
+
+  <Accordion title="to_numpy() — binary matrix representation">
+    Returns the six binary matrices `(x2x, x2z, z2x, z2z, x_signs, z_signs)` describing the tableau.
+
+    ```python
+    def to_numpy(self, *, bit_packed: bool = False) -> Tuple[...]
+    ```
+  </Accordion>
+
+  <Accordion title="to_pauli_string() — as a Pauli product">
+    If the tableau is equivalent to a Pauli product (e.g. a product of single-qubit X, Y, Z gates), returns the corresponding `stim.PauliString`. Raises `ValueError` otherwise.
+
+    ```python
+    def to_pauli_string(self) -> stim.PauliString
+    ```
+  </Accordion>
+</AccordionGroup>

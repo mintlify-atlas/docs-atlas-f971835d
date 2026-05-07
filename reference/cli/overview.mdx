@@ -1,0 +1,120 @@
+---
+title: "Stim command line interface overview"
+description: "Install stim and explore its eleven subcommands for sampling circuits, analyzing errors, converting data formats, and generating diagrams."
+---
+
+Stim ships a single `stim` executable that exposes all of its simulation and analysis capabilities as subcommands. After installing the Python package, the binary is available on your PATH and accepts the general form `stim <command> [flags]`. You can pipe circuits through stdin, redirect output to files, and chain commands together to build end-to-end quantum error correction workflows directly from the shell.
+
+## Installation
+
+```bash
+pip install stim
+```
+
+Once installed, verify the binary is available:
+
+```bash
+stim help
+```
+
+## Available commands
+
+<CardGroup cols={2}>
+  <Card title="analyze_errors" icon="circle-nodes" href="/reference/cli/commands#analyze_errors">
+    Converts a Stim circuit into a detector error model (DEM). Supports error decomposition and loop folding for circuits with `REPEAT` blocks.
+  </Card>
+  <Card title="convert" icon="arrow-right-arrow-left" href="/reference/cli/commands#convert">
+    Converts measurement or detection event data between result formats: `01`, `b8`, `r8`, `ptb64`, `hits`, and `dets`.
+  </Card>
+  <Card title="detect" icon="radar" href="/reference/cli/commands#detect">
+    Samples detection events and observable flips from a noisy circuit. Writes detection data and observable data to separate files.
+  </Card>
+  <Card title="diagram" icon="chart-network" href="/reference/cli/commands#diagram">
+    Produces ASCII, SVG, or GLTF diagrams of circuits and detector error models, including timeline and detector-slice views.
+  </Card>
+  <Card title="explain_errors" icon="magnifying-glass" href="/reference/cli/commands#explain_errors">
+    Maps detector error model errors back to the physical circuit errors that cause them, useful for debugging and decoder analysis.
+  </Card>
+  <Card title="gen" icon="wand-magic-sparkles" href="/reference/cli/commands#gen">
+    Generates annotated example circuits for the repetition code, surface code, and color code with configurable noise models.
+  </Card>
+  <Card title="help" icon="circle-question" href="/reference/cli/commands#help">
+    Prints usage information for the `stim` binary and its subcommands.
+  </Card>
+  <Card title="m2d" icon="right-left" href="/reference/cli/commands#m2d">
+    Converts raw measurement data from hardware runs into detection event data by comparing against a reference sample derived from the circuit.
+  </Card>
+  <Card title="repl" icon="terminal" href="/reference/cli/commands#repl">
+    Runs Stim in interactive read-evaluate-print-loop mode, measuring qubits and printing results as you type circuit instructions.
+  </Card>
+  <Card title="sample" icon="flask" href="/reference/cli/commands#sample">
+    Samples raw measurement results from a circuit. Supports multiple shots, seeded randomness, and all output data formats.
+  </Card>
+  <Card title="sample_dem" icon="dice" href="/reference/cli/commands#sample_dem">
+    Samples detection events directly from a detector error model. Supports recording and replaying which errors occurred.
+  </Card>
+</CardGroup>
+
+## Getting help
+
+Every command supports a `--help` flag that prints its full usage, option list, and examples.
+
+```bash
+# General help
+stim help
+
+# Help for a specific command
+stim analyze_errors --help
+stim gen --help
+stim sample --help
+```
+
+## Common usage patterns
+
+**Generate a circuit and immediately analyze its errors:**
+
+```bash
+stim gen \
+    --code repetition_code \
+    --task memory \
+    --distance 5 \
+    --rounds 100 \
+    --after_clifford_depolarization 0.001 \
+    > rep_code.stim
+
+stim analyze_errors --fold_loops --in rep_code.stim
+```
+
+**Sample detection events and save observables separately:**
+
+```bash
+stim detect \
+    --in rep_code.stim \
+    --shots 10000 \
+    --out_format b8 \
+    --out detections.b8 \
+    --obs_out observables.01 \
+    --obs_out_format 01
+```
+
+**Convert measurement data from hardware into detection events:**
+
+```bash
+stim m2d \
+    --circuit rep_code.stim \
+    --in hardware_measurements.01 \
+    --in_format 01 \
+    --out detections.dets \
+    --out_format dets \
+    --obs_out observables.01
+```
+
+**Draw a text timeline diagram of a circuit:**
+
+```bash
+stim diagram --type timeline-text --in rep_code.stim
+```
+
+<Note>
+All commands read from stdin by default when `--in` is not specified, and write to stdout when `--out` is not specified. This makes it easy to compose commands with shell pipes.
+</Note>

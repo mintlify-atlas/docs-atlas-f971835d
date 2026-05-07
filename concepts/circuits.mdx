@@ -1,0 +1,221 @@
+---
+title: "Stim circuits: core data structure and .stim format"
+description: "Learn how stim.Circuit encodes gates, measurements, noise, and annotations as a sequence of instructions in the .stim text format."
+---
+
+`stim.Circuit` is the central object in Stim. It holds a sequence of instructions — Clifford gates, measurements, resets, noise channels, and annotations — that describe a stabilizer circuit. Every sampling and analysis workflow begins with building or loading a circuit, then invoking methods such as `compile_sampler()` or `detector_error_model()` to produce results. Circuits can be constructed from a string of `.stim` program text, generated automatically for common code families, or loaded from a file.
+
+## The .stim text format
+
+A `.stim` file is a UTF-8 text file made up of instruction lines. Each line is either blank, an instruction, a `REPEAT` block initiator, or a closing `}`. Comments begin with `#` and indentation is purely decorative.
+
+An instruction has the form:
+
+```text
+NAME[(arg, ...)] target target ...
+```
+
+Names are case-insensitive. Targets are non-negative integers (qubits), `rec[-n]` (measurement record offsets), or Pauli targets like `X1`.
+
+### Gate categories
+
+<CardGroup cols={3}>
+  <Card title="Clifford gates" icon="bolt">
+    Unitary operations: `H`, `S`, `CNOT`, `CX`, `CZ`, `SWAP`, `ISWAP`, and many more. These transform the stabilizer state without collapsing it.
+  </Card>
+  <Card title="Collapsing gates" icon="chart-bar">
+    Measurements and resets: `M` (Z-basis measure), `MX`, `MY`, `MR` (measure-and-reset), `R` (reset). Results are appended to the measurement record.
+  </Card>
+  <Card title="Noise channels" icon="triangle-exclamation">
+    Probabilistic Pauli errors: `X_ERROR(p)`, `DEPOLARIZE1(p)`, `DEPOLARIZE2(p)`, and others. These are ignored during ideal simulation.
+  </Card>
+</CardGroup>
+
+### Annotations
+
+`DETECTOR` and `OBSERVABLE_INCLUDE` are the most important annotations. They define which measurement results form parity checks and which track logical qubit state. Other annotations (`QUBIT_COORDS`, `TICK`, `SHIFT_COORDS`) add spacetime layout hints without affecting simulation.
+
+## Basic circuit examples
+
+<Tabs>
+  <Tab title="Bell pair">
+    ```stim
+    # Prepare a Bell pair on qubits 0 and 1
+    H 0
+    CNOT 0 1
+    M 0 1
+    DETECTOR rec[-1] rec[-2]
+    ```
+  </Tab>
+  <Tab title="Teleportation">
+    ```stim
+    # Distribute a Bell pair
+    H 0
+    CNOT 0 99
+
+    # Sender creates an arbitrary state
+    H 1
+    S 1
+
+    # Bell basis measurement
+    CNOT 0 1
+    H 0
+    M 0 1
+
+    # Receiver corrects based on measurement results
+    CZ rec[-2] 99
+    CNOT rec[-1] 99
+    ```
+  </Tab>
+  <Tab title="Noisy repetition code">
+    ```stim
+    # One round of a distance-4 repetition code with noise
+    R 0 1 2 3 4 5 6
+    TICK
+    CX 0 1 2 3 4 5
+    DEPOLARIZE2(0.001) 0 1 2 3 4 5
+    TICK
+    CX 2 1 4 3 6 5
+    DEPOLARIZE2(0.001) 2 1 4 3 6 5
+    TICK
+    MR 1 3 5
+    DETECTOR(1, 0) rec[-3]
+    DETECTOR(3, 0) rec[-2]
+    DETECTOR(5, 0) rec[-1]
+    ```
+  </Tab>
+</Tabs>
+
+## Creating circuits in Python
+
+<Steps>
+  <Step title="From a string">
+    Pass `.stim` program text directly to the constructor:
+
+    ```python
+    import stim
+
+    circuit = stim.Circuit("""
+        H 0
+        CNOT 0 1
+        M 0 1
+        DETECTOR rec[-1] rec[-2]
+    """)
+    ```
+  </Step>
+  <Step title="Using Circuit.generated()">
+    Generate common QEC circuits with configurable noise in a single call:
+
+    ```python
+    import stim
+
+    circuit = stim.Circuit.generated(
+        "repetition_code:memory",
+        distance=4,
+        rounds=10000,
+        after_clifford_depolarization=0.0125,
+    )
+    ```
+
+    Available code tasks include `"repetition_code:memory"`, `"surface_code:rotated_memory_x"`, `"surface_code:rotated_memory_z"`, `"surface_code:unrotated_memory_x"`, `"surface_code:unrotated_memory_z"`, and `"color_code:memory_xyz"`.
+  </Step>
+  <Step title="From a file">
+    Load a `.stim` file from disk:
+
+    ```python
+    import stim
+
+    # From a file path
+    circuit = stim.Circuit.from_file("my_circuit.stim")
+
+    # From an open file handle
+    with open("my_circuit.stim") as f:
+        circuit = stim.Circuit.from_file(f)
+    ```
+  </Step>
+  <Step title="By appending instructions">
+    Build a circuit incrementally using `append()`:
+
+    ```python
+    import stim
+
+    circuit = stim.Circuit()
+    circuit.append("H", [0])
+    circuit.append("CNOT", [0, 1])
+    circuit.append("M", [0, 1])
+    ```
+  </Step>
+</Steps>
+
+## Key circuit properties
+
+Once you have a circuit, several properties let you inspect its structure without running a simulation:
+
+```python
+import stim
+
+circuit = stim.Circuit.generated(
+    "surface_code:rotated_memory_x",
+    distance=3,
+    rounds=100,
+    after_clifford_depolarization=0.001,
+)
+
+print(circuit.num_qubits)       # Number of qubits (one more than the largest qubit index)
+print(circuit.num_measurements) # Total measurement bits across the entire circuit
+print(circuit.num_detectors)    # Total detector count (expands REPEAT blocks)
+print(circuit.num_observables)  # Number of logical observables defined
+```
+
+<Note>
+`num_measurements`, `num_detectors`, and `num_observables` fully expand `REPEAT` blocks when counting. A circuit with `REPEAT 1000 { MR 1 3 5 }` reports `num_measurements = 3000`.
+</Note>
+
+## REPEAT blocks
+
+`REPEAT K { ... }` executes its body `K` times. Repetition is the standard way to express the periodic stabilizer measurement rounds in QEC codes without literally unrolling them.
+
+```stim
+# First round — detectors have no prior measurement to compare against
+CNOT 0 1 2 3 4 5
+CNOT 2 1 4 3 6 5
+MR 1 3 5
+DETECTOR rec[-3]
+DETECTOR rec[-2]
+DETECTOR rec[-1]
+
+# Subsequent 999 rounds — each detector compares current and previous measurement
+REPEAT 999 {
+    CNOT 0 1 2 3 4 5
+    CNOT 2 1 4 3 6 5
+    MR 1 3 5
+    DETECTOR rec[-3] rec[-6]
+    DETECTOR rec[-2] rec[-5]
+    DETECTOR rec[-1] rec[-4]
+}
+```
+
+<Warning>
+Repeat counts of 0 are not allowed. A `REPEAT 0 { ... }` block is a parse error because it creates ambiguity about whether the observables and detectors inside the block exist.
+</Warning>
+
+### Broadcasting
+
+When a single-qubit gate receives multiple targets, it is broadcast independently over each:
+
+```stim
+# These two lines are equivalent:
+H 0 1 2
+# H 0
+# H 1
+# H 2
+```
+
+Two-qubit gates broadcast over aligned pairs:
+
+```stim
+# These two lines are equivalent:
+CNOT 0 1 2 3
+# CNOT 0 1
+# CNOT 2 3
+```

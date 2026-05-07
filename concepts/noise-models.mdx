@@ -1,0 +1,175 @@
+---
+title: "Noise channels and Pauli noise models supported by Stim"
+description: "An overview of every Pauli noise channel available in stim.Circuit, including depolarizing, correlated, and heralded erasure noise, with usage examples."
+---
+
+Stim's circuit noise model is restricted to **Pauli channels** — probabilistic applications of tensor products of `{I, X, Y, Z}` operators. This covers the noise models most relevant to fault-tolerance thresholds and is sufficient to model physical hardware at the level of abstraction used by most QEC researchers. Non-Pauli noise (such as amplitude damping or coherent errors) cannot be expressed directly in a `.stim` circuit file, but can be simulated manually using `stim.TableauSimulator`.
+
+Noise instructions are valid circuit instructions like any gate. During ideal simulation — for example, when calling `circuit.to_tableau()` or `circuit.without_noise()` — all noise channels are silently ignored. When sampling with `circuit.compile_sampler()` or `circuit.compile_detector_sampler()`, noise fires stochastically.
+
+## Single-qubit Pauli flips
+
+These channels apply a fixed Pauli operator with a given probability to each targeted qubit independently.
+
+<Tabs>
+  <Tab title="X_ERROR">
+    Applies a Pauli X (bit flip) with probability `p`:
+
+    ```stim
+    # 0.1% chance of a bit flip on qubit 5
+    X_ERROR(0.001) 5
+
+    # Apply independently to qubits 5 and 42
+    X_ERROR(0.001) 5 42
+    ```
+
+    Pauli mixture: `(1-p) I + p X`
+  </Tab>
+  <Tab title="Y_ERROR">
+    Applies a Pauli Y (combined bit and phase flip) with probability `p`:
+
+    ```stim
+    # 1% Y error on qubits 0 and 1
+    Y_ERROR(0.01) 0 1
+    ```
+
+    Pauli mixture: `(1-p) I + p Y`
+  </Tab>
+  <Tab title="Z_ERROR">
+    Applies a Pauli Z (phase flip) with probability `p`:
+
+    ```stim
+    # 0.5% Z error (dephasing) on qubit 3
+    Z_ERROR(0.005) 3
+    ```
+
+    Pauli mixture: `(1-p) I + p Z`
+  </Tab>
+</Tabs>
+
+## Depolarizing channels
+
+<CardGroup cols={2}>
+  <Card title="DEPOLARIZE1(p)" icon="circle-1">
+    Single-qubit depolarizing channel. Applies a uniformly random non-identity Pauli (`X`, `Y`, or `Z`) each with probability `p/3`. Maximal mixing occurs at `p=0.75`.
+
+    ```stim
+    # 1% depolarization on qubit 0
+    DEPOLARIZE1(0.01) 0
+
+    # Apply independently to qubits 2, 3, and 5
+    DEPOLARIZE1(0.01) 2 3 5
+    ```
+
+    Pauli mixture: `(1-p) I + (p/3) X + (p/3) Y + (p/3) Z`
+  </Card>
+  <Card title="DEPOLARIZE2(p)" icon="circle-2">
+    Two-qubit depolarizing channel. Applies a uniformly random non-identity Pauli pair from the 15 non-`II` elements of `{I,X,Y,Z}⊗{I,X,Y,Z}`, each with probability `p/15`. Maximal mixing occurs at `p=0.9375`.
+
+    ```stim
+    # 1% two-qubit depolarization on the pair (0, 1)
+    DEPOLARIZE2(0.01) 0 1
+
+    # Apply independently to pairs (2,3) and (5,7)
+    DEPOLARIZE2(0.01) 2 3 5 7
+    ```
+
+    Pauli mixture: `(1-p) II + (p/15)(IX + IY + IZ + XI + XX + XY + XZ + YI + YX + YY + YZ + ZI + ZX + ZY + ZZ)`
+  </Card>
+</CardGroup>
+
+<Note>
+`DEPOLARIZE2` is the most common noise model for two-qubit gates in superconducting qubit systems. After every `CX` or `CZ` in an annotated circuit, you will typically see `DEPOLARIZE2(p) control target`.
+</Note>
+
+## Custom Pauli channels
+
+### PAULI_CHANNEL_1(px, py, pz)
+
+A single-qubit Pauli channel with individually specified error probabilities. The three arguments are disjoint, so their sum must not exceed 1. The no-error probability is `1 - px - py - pz`.
+
+```stim
+# 10% X, 15% Y, 20% Z, 55% I — applied independently to qubits 1, 2, 4
+PAULI_CHANNEL_1(0.1, 0.15, 0.2) 1 2 4
+```
+
+This is useful for modeling biased noise (e.g., pure dephasing where `px = py = 0` and only `pz > 0`).
+
+## Correlated errors
+
+`CORRELATED_ERROR` (also written as `E`) and `ELSE_CORRELATED_ERROR` model error mechanisms that simultaneously affect multiple qubits, or that arise from a single underlying fault in hardware.
+
+### CORRELATED_ERROR(p) / ELSE_CORRELATED_ERROR(p)
+
+`CORRELATED_ERROR` fires with probability `p` and sets an internal "correlated error occurred" flag. Subsequent `ELSE_CORRELATED_ERROR` instructions fire with their stated probability *only if* no earlier error in the group has fired yet. Together they represent a single fault that can manifest in different ways.
+
+```stim
+# With 60% total probability, uniformly pick one of three error patterns:
+#   20% chance: apply X on qubit 1 and Y on qubit 2
+#   25% of remaining 80% = 20% chance: apply Z on qubit 2 and Z on qubit 3
+#   1/3 of remaining 60% = 20% chance: apply X1*Y2*Z3
+CORRELATED_ERROR(0.2) X1 Y2
+ELSE_CORRELATED_ERROR(0.25) Z2 Z3
+ELSE_CORRELATED_ERROR(0.33333333333) X1 Y2 Z3
+```
+
+Targets use Pauli prefixes (`X`, `Y`, `Z`) and are all implicitly combined (no explicit `*` combiner needed, for backward compatibility).
+
+<Warning>
+When converting a circuit with `ELSE_CORRELATED_ERROR` to a detector error model, every `ELSE_CORRELATED_ERROR` must be preceded (without interruption) by a `CORRELATED_ERROR` or another `ELSE_CORRELATED_ERROR`. Interleaving other instructions between them will cause an error.
+</Warning>
+
+## Heralded erasure
+
+### HERALDED_ERASE(p)
+
+The heralded erasure channel records a measurement bit indicating whether or not an erasure occurred. When it fires (probability `p`), the qubit is erased to the maximally mixed state (via `X_ERROR(0.5)` and `Z_ERROR(0.5)`). When it does not fire (probability `1-p`), a `0` is recorded and the qubit is untouched.
+
+```stim
+# Erase qubit 0 with 1% probability; herald the erasure into the record
+HERALDED_ERASE(0.01) 0
+DETECTOR rec[-1]   # Fires when the erasure actually occurred
+
+# Independent erasures on qubits 2 and 3
+HERALDED_ERASE(0.02) 2 3
+```
+
+Pauli mixture:
+
+| Probability | Herald bit | Effect |
+|:-----------:|:----------:|--------|
+| `1-p`       | `0`        | `I`    |
+| `p/4`       | `1`        | `I`    |
+| `p/4`       | `1`        | `X`    |
+| `p/4`       | `1`        | `Y`    |
+| `p/4`       | `1`        | `Z`    |
+
+<Warning>
+When a circuit containing `HERALDED_ERASE` is converted to a DEM via `circuit.detector_error_model()`, Stim splits the channel into independent effects. This is an approximation: independent effects from the same heralded error can combine in ways that cancel the herald detector. The resulting inaccuracy scales as `p²` and means a DEM-based decoder may believe unheralded errors are possible even when the circuit uses only heralded noise.
+</Warning>
+
+## Limitations and non-Pauli noise
+
+<AccordionGroup>
+  <Accordion title="Why only Pauli noise in circuits?">
+    Pauli channels are the natural noise model for the stabilizer formalism. They keep the simulation state in the stabilizer representation and allow efficient bulk sampling via the Clifford frame simulation algorithm. Non-Pauli channels (such as amplitude damping, depolarizing with coherent rotations, or leakage) cannot be represented exactly within this framework.
+  </Accordion>
+  <Accordion title="Simulating non-Pauli noise with TableauSimulator">
+    If you need to model amplitude damping or other non-Pauli channels, you can use `stim.TableauSimulator` and manually implement the channel by sampling which Kraus operator was applied (based on the channel's probabilities) and then calling the corresponding Pauli method (`x_error`, `z_error`, etc.) on the simulator. This is more flexible but cannot produce the fast bulk samples that the compiled samplers can.
+  </Accordion>
+  <Accordion title="Noise is ignored during ideal simulation">
+    Methods that analyze the circuit without stochastic sampling — such as `circuit.to_tableau()`, `circuit.without_noise()`, and the noiseless reference pass used to determine detector parities — all ignore every noise instruction. Only the compiled samplers (`compile_sampler()`, `compile_detector_sampler()`) actually fire noise during execution.
+  </Accordion>
+</AccordionGroup>
+
+## Choosing the right noise channel
+
+| Scenario | Recommended channel |
+|---|---|
+| Single-qubit gate errors (symmetric) | `DEPOLARIZE1(p)` |
+| Two-qubit gate errors (symmetric) | `DEPOLARIZE2(p)` |
+| Measurement readout error | `X_ERROR(p)` before `M` |
+| Reset error | `X_ERROR(p)` after `R` |
+| Biased (dephasing-only) noise | `Z_ERROR(p)` or `PAULI_CHANNEL_1(0, 0, p)` |
+| Hardware-specific correlated faults | `CORRELATED_ERROR` / `ELSE_CORRELATED_ERROR` |
+| Erasure-based hardware (e.g., neutral atoms) | `HERALDED_ERASE(p)` |

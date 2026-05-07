@@ -1,0 +1,592 @@
+---
+title: "stim.Circuit — circuit definition and analysis"
+description: "Complete API reference for stim.Circuit, the primary interface for defining stabilizer circuits, sampling measurements, and running error analysis in Stim."
+---
+
+`stim.Circuit` is the central class in the Stim library. You describe a noisy stabilizer computation to Stim by building a `Circuit` object, then use it to generate detector error models for decoders, bulk-sample measurement outcomes, or search for undetectable logical errors. Circuits are mutable and support a text-based format that can be saved and reloaded from files.
+
+## Constructor
+
+<AccordionGroup>
+  <Accordion title="stim.Circuit(stim_program_text='')">
+    Creates a new `stim.Circuit`, optionally pre-populated from Stim program text.
+
+    ```python
+    def __init__(self, stim_program_text: str = '') -> None
+    ```
+
+    **Parameters**
+
+    | Name | Type | Description |
+    |------|------|-------------|
+    | `stim_program_text` | `str` | Stim program text to parse and append. Defaults to empty. |
+
+    ```python
+    import stim
+
+    empty = stim.Circuit()
+    not_empty = stim.Circuit('''
+        X 0
+        CNOT 0 1
+        M 1
+    ''')
+    ```
+  </Accordion>
+
+  <Accordion title="stim.Circuit.generated() — built-in code families">
+    Generates complete, annotated circuits for well-known quantum error correcting codes.
+
+    ```python
+    @staticmethod
+    def generated(
+        code_task: str,
+        *,
+        distance: int,
+        rounds: int,
+        after_clifford_depolarization: float = 0.0,
+        before_round_data_depolarization: float = 0.0,
+        before_measure_flip_probability: float = 0.0,
+        after_reset_flip_probability: float = 0.0,
+    ) -> stim.Circuit
+    ```
+
+    **Parameters**
+
+    | Name | Type | Description |
+    |------|------|-------------|
+    | `code_task` | `str` | One of `"repetition_code:memory"`, `"surface_code:rotated_memory_x"`, `"surface_code:rotated_memory_z"`, `"surface_code:unrotated_memory_x"`, `"surface_code:unrotated_memory_z"`, `"color_code:memory_xyz"`. |
+    | `distance` | `int` | Code distance (minimum number of physical errors causing a logical error). |
+    | `rounds` | `int` | Number of measurement rounds. |
+    | `after_clifford_depolarization` | `float` | Probability of depolarizing noise after each Clifford gate. |
+    | `before_round_data_depolarization` | `float` | Probability of depolarizing data qubits at the start of each round. |
+    | `before_measure_flip_probability` | `float` | Probability of bit-flip before each measurement. |
+    | `after_reset_flip_probability` | `float` | Probability of bit-flip after each reset. |
+
+    The returned circuit includes `DETECTOR`, `OBSERVABLE_INCLUDE`, and `TICK` annotations.
+
+    ```python
+    import stim
+
+    circuit = stim.Circuit.generated(
+        "surface_code:rotated_memory_x",
+        distance=5,
+        rounds=10,
+        after_clifford_depolarization=0.001,
+    )
+    print(circuit.num_qubits)     # number of physical qubits
+    print(circuit.num_detectors)  # number of parity check detectors
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Building circuits
+
+<AccordionGroup>
+  <Accordion title="append() — add instructions">
+    Appends a gate, instruction, repeat block, or another circuit onto this one.
+
+    ```python
+    def append(
+        self,
+        name: Union[str, stim.CircuitInstruction, stim.CircuitRepeatBlock, stim.Circuit],
+        targets: Union[int, stim.GateTarget, stim.PauliString,
+                       Iterable[Union[int, stim.GateTarget, stim.PauliString]]] = (),
+        arg: Union[float, Iterable[float], None] = None,
+        *,
+        tag: str = '',
+    ) -> None
+    ```
+
+    **Parameters**
+
+    | Name | Type | Description |
+    |------|------|-------------|
+    | `name` | `str` or instruction | Gate name (e.g. `"H"`, `"M"`, `"CNOT"`) or an existing instruction/circuit to append. |
+    | `targets` | int, GateTarget, or iterable | Qubits or gate targets the operation acts on. |
+    | `arg` | float or list of floats | Parens arguments such as noise probability. |
+    | `tag` | `str` | Optional string tag attached to the instruction. |
+
+    ```python
+    import stim
+
+    c = stim.Circuit()
+    c.append("H", [0, 1])
+    c.append("CNOT", [0, 1])
+    c.append("M", [0, stim.target_inv(1)])
+    c.append("X_ERROR", [0], 0.125)
+    print(c)
+    ```
+  </Accordion>
+
+  <Accordion title="__add__ and __iadd__ — concatenation">
+    Combines two circuits by appending the second after the first.
+
+    ```python
+    def __add__(self, second: stim.Circuit) -> stim.Circuit
+    def __iadd__(self, second: stim.Circuit) -> stim.Circuit
+    ```
+
+    ```python
+    import stim
+
+    c1 = stim.Circuit("X 0\nY 1 2")
+    c2 = stim.Circuit("M 0 1 2")
+    combined = c1 + c2   # new circuit
+    c1 += c2             # mutates c1 in place
+    ```
+  </Accordion>
+
+  <Accordion title="__mul__ and __imul__ — repetition">
+    Wraps the circuit contents into a `REPEAT` block.
+
+    ```python
+    def __mul__(self, repetitions: int) -> stim.Circuit
+    def __imul__(self, repetitions: int) -> stim.Circuit
+    ```
+
+    Special cases: `repetitions=0` returns an empty circuit; `repetitions=1` returns a copy.
+
+    ```python
+    import stim
+
+    round_circuit = stim.Circuit('''
+        CX 0 1 2 3
+        M 1 3
+    ''')
+    full = round_circuit * 100   # REPEAT 100 { ... }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Sampling
+
+<AccordionGroup>
+  <Accordion title="compile_sampler() — raw measurement sampler">
+    Returns a `stim.CompiledMeasurementSampler` that efficiently produces bulk measurement results.
+
+    ```python
+    def compile_sampler(
+        self,
+        *,
+        skip_reference_sample: bool = False,
+        seed: Optional[int] = None,
+        reference_sample: Optional[np.ndarray] = None,
+    ) -> stim.CompiledMeasurementSampler
+    ```
+
+    **Parameters**
+
+    | Name | Type | Description |
+    |------|------|-------------|
+    | `skip_reference_sample` | `bool` | When `True`, skips collecting the noiseless reference sample; results will be flip-relative. |
+    | `seed` | `int` or `None` | Deterministic seed for the RNG. Results are consistent only within the same Stim version. |
+    | `reference_sample` | `np.ndarray` or `None` | Explicit reference sample to use instead of collecting one. |
+
+    ```python
+    import stim
+
+    sampler = stim.Circuit('''
+        X_ERROR(0.01) 0
+        M 0
+    ''').compile_sampler()
+    results = sampler.sample(shots=1000)  # shape (1000, 1), dtype=bool_
+    ```
+  </Accordion>
+
+  <Accordion title="compile_detector_sampler() — detection event sampler">
+    Returns a `stim.CompiledDetectorSampler` that produces detection event and observable flip data.
+
+    ```python
+    def compile_detector_sampler(
+        self,
+        *,
+        seed: object = None,
+    ) -> stim.CompiledDetectorSampler
+    ```
+
+    ```python
+    import stim
+
+    c = stim.Circuit('''
+        H 0
+        CNOT 0 1
+        M 0 1
+        DETECTOR rec[-1] rec[-2]
+    ''')
+    sampler = c.compile_detector_sampler()
+    det_events, obs_flips = sampler.sample(shots=1000, separate_observables=True)
+    ```
+  </Accordion>
+
+  <Accordion title="compile_m2d_converter() — measurement-to-detection converter">
+    Creates a `stim.CompiledMeasurementsToDetectionEventsConverter` for converting raw measurement arrays into detection events offline.
+
+    ```python
+    def compile_m2d_converter(
+        self,
+        *,
+        skip_reference_sample: bool = False,
+    ) -> stim.CompiledMeasurementsToDetectionEventsConverter
+    ```
+
+    ```python
+    import stim, numpy as np
+
+    converter = stim.Circuit('''
+        X 0
+        M 0
+        DETECTOR rec[-1]
+    ''').compile_m2d_converter()
+
+    raw = np.array([[0], [1]], dtype=np.bool_)
+    det = converter.convert(measurements=raw, append_observables=False)
+    # det == [[True], [False]]
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Analysis
+
+<AccordionGroup>
+  <Accordion title="detector_error_model() — convert circuit to a DEM">
+    Converts the circuit into a `stim.DetectorErrorModel` describing all error mechanisms.
+
+    ```python
+    def detector_error_model(
+        self,
+        *,
+        decompose_errors: bool = False,
+        flatten_loops: bool = False,
+        allow_gauge_detectors: bool = False,
+        approximate_disjoint_errors: float = False,
+        ignore_decomposition_failures: bool = False,
+        block_decomposition_from_introducing_remnant_edges: bool = False,
+    ) -> stim.DetectorErrorModel
+    ```
+
+    **Parameters**
+
+    | Name | Type | Description |
+    |------|------|-------------|
+    | `decompose_errors` | `bool` | Decompose composite errors into at-most-two-detector components for matching decoders. |
+    | `flatten_loops` | `bool` | Expand all `REPEAT` blocks into inline instructions. |
+    | `allow_gauge_detectors` | `bool` | Treat non-deterministic detectors as gauge degrees of freedom. |
+    | `approximate_disjoint_errors` | `bool` or `float` | Treat disjoint error channels as independent (approximation). |
+
+    ```python
+    import stim
+
+    dem = stim.Circuit('''
+        X_ERROR(0.01) 0
+        M 0
+        DETECTOR rec[-1]
+    ''').detector_error_model()
+    print(dem)
+    ```
+  </Accordion>
+
+  <Accordion title="shortest_graphlike_error() — find distance-limiting errors">
+    Finds the smallest set of graphlike errors that cause an undetected logical error.
+
+    ```python
+    def shortest_graphlike_error(
+        self,
+        *,
+        ignore_ungraphlike_errors: bool = True,
+        canonicalize_circuit_errors: bool = False,
+    ) -> List[stim.ExplainedError]
+    ```
+
+    ```python
+    import stim
+
+    circuit = stim.Circuit.generated(
+        "repetition_code:memory",
+        rounds=10,
+        distance=7,
+        before_round_data_depolarization=0.01,
+    )
+    errors = circuit.shortest_graphlike_error()
+    print(f"Code distance upper bound: {len(errors)}")
+    ```
+  </Accordion>
+
+  <Accordion title="search_for_undetectable_logical_errors() — heuristic search">
+    Heuristically searches for small sets of errors that cause an undetected logical error, including non-graphlike (hyperedge) errors.
+
+    ```python
+    def search_for_undetectable_logical_errors(
+        self,
+        *,
+        dont_explore_detection_event_sets_with_size_above: int,
+        dont_explore_edges_with_degree_above: int,
+        dont_explore_edges_increasing_symptom_degree: bool,
+        canonicalize_circuit_errors: bool = False,
+    ) -> List[stim.ExplainedError]
+    ```
+
+    <Warning>
+      This is a heuristic method. The truncation parameters trade search cost for completeness. Results are not guaranteed to be the smallest possible logical error.
+    </Warning>
+
+    ```python
+    import stim
+
+    circuit = stim.Circuit.generated(
+        "surface_code:rotated_memory_x",
+        rounds=5,
+        distance=5,
+        after_clifford_depolarization=0.001,
+    )
+    errors = circuit.search_for_undetectable_logical_errors(
+        dont_explore_detection_event_sets_with_size_above=4,
+        dont_explore_edges_with_degree_above=4,
+        dont_explore_edges_increasing_symptom_degree=True,
+    )
+    print(len(errors))
+    ```
+  </Accordion>
+
+  <Accordion title="explain_detector_error_model_errors() — map DEM errors to circuit errors">
+    Explains how each `stim.DetectorErrorModel` error term is produced by physical circuit errors.
+
+    ```python
+    def explain_detector_error_model_errors(
+        self,
+        *,
+        dem_filter: object = None,
+        reduce_to_one_representative_error: bool = False,
+    ) -> List[stim.ExplainedError]
+    ```
+
+    ```python
+    import stim
+
+    circuit = stim.Circuit('''
+        H 0
+        CNOT 0 1
+        DEPOLARIZE1(0.01) 0
+        CNOT 0 1
+        H 0
+        M 0 1
+        DETECTOR rec[-1]
+        DETECTOR rec[-2]
+    ''')
+    explained = circuit.explain_detector_error_model_errors(
+        dem_filter=stim.DetectorErrorModel("error(1) D0 D1"),
+        reduce_to_one_representative_error=True,
+    )
+    print(explained[0].circuit_error_locations[0])
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Properties
+
+<CardGroup cols={2}>
+  <Card title="num_qubits" icon="microchip">
+    `int` — Number of qubits used when simulating the circuit. Always one more than the largest qubit index referenced.
+
+    ```python
+    stim.Circuit("H 0\nM 0 1 100").num_qubits  # 101
+    ```
+  </Card>
+  <Card title="num_measurements" icon="ruler">
+    `int` — Total number of measurement bits produced when running the circuit, including inside `REPEAT` blocks.
+
+    ```python
+    stim.Circuit("M 0\nREPEAT 100 { M 0 1 }").num_measurements  # 201
+    ```
+  </Card>
+  <Card title="num_detectors" icon="triangle-exclamation">
+    `int` — Number of `DETECTOR` bits produced when sampling the circuit.
+
+    ```python
+    c.num_detectors
+    ```
+  </Card>
+  <Card title="num_observables" icon="eye">
+    `int` — Number of logical observables declared via `OBSERVABLE_INCLUDE`. One more than the largest index used.
+
+    ```python
+    c.num_observables
+    ```
+  </Card>
+  <Card title="num_ticks" icon="clock">
+    `int` — Number of `TICK` instructions executed (counting each loop iteration).
+
+    ```python
+    c.num_ticks
+    ```
+  </Card>
+  <Card title="num_sweep_bits" icon="toggle-on">
+    `int` — Number of sweep configuration bits required by the circuit.
+
+    ```python
+    c.num_sweep_bits
+    ```
+  </Card>
+</CardGroup>
+
+## I/O
+
+<AccordionGroup>
+  <Accordion title="from_file() — load circuit from disk">
+    Reads a circuit from a `.stim` file or any file-like object.
+
+    ```python
+    @staticmethod
+    def from_file(
+        file: Union[io.TextIOBase, str, pathlib.Path],
+    ) -> stim.Circuit
+    ```
+
+    ```python
+    import stim
+
+    circuit = stim.Circuit.from_file("my_circuit.stim")
+    ```
+  </Accordion>
+
+  <Accordion title="to_file() — save circuit to disk">
+    Writes the circuit in Stim format to a file path or file-like object.
+
+    ```python
+    def to_file(
+        self,
+        file: Union[io.TextIOBase, str, pathlib.Path],
+    ) -> None
+    ```
+
+    ```python
+    import stim
+
+    c = stim.Circuit("H 0\nCNOT 0 1\nM 0 1")
+    c.to_file("output.stim")
+    ```
+  </Accordion>
+
+  <Accordion title="to_qasm() — export to OpenQASM">
+    Converts the circuit to an OpenQASM 2 or 3 string.
+
+    ```python
+    def to_qasm(
+        self,
+        *,
+        open_qasm_version: int,
+        skip_dets_and_obs: bool = False,
+    ) -> str
+    ```
+
+    **Parameters**
+
+    | Name | Type | Description |
+    |------|------|-------------|
+    | `open_qasm_version` | `int` | Target OpenQASM version: `2` or `3`. |
+    | `skip_dets_and_obs` | `bool` | Omit detector and observable registers from output. |
+
+    <Note>
+      Detector and observable support requires OpenQASM 3 (version 3 supports classical operations). Feedback and subroutines are also version-3 only.
+    </Note>
+
+    ```python
+    import stim
+
+    qasm = stim.Circuit("H 0\nCNOT 0 1\nM 0 1").to_qasm(open_qasm_version=3)
+    print(qasm)
+    ```
+  </Accordion>
+
+  <Accordion title="to_crumble_url() — open in Crumble editor">
+    Returns a URL that opens the circuit in the [Crumble](https://algassert.com/crumble) interactive stabilizer circuit editor.
+
+    ```python
+    def to_crumble_url(
+        self,
+        *,
+        skip_detectors: bool = False,
+        mark: Optional[Dict[int, List[stim.ExplainedError]]] = None,
+    ) -> str
+    ```
+
+    ```python
+    import stim
+
+    url = stim.Circuit("H 0\nCNOT 0 1\nS 1").to_crumble_url()
+    # 'https://algassert.com/crumble#circuit=H_0;CX_0_1;S_1_'
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Additional methods
+
+<AccordionGroup>
+  <Accordion title="flattened() — expand REPEAT blocks">
+    Returns an equivalent circuit with all `REPEAT` and `SHIFT_COORDS` instructions expanded inline.
+
+    ```python
+    def flattened(self) -> stim.Circuit
+    ```
+  </Accordion>
+
+  <Accordion title="without_noise() — strip noise">
+    Returns a copy of the circuit with all noise operations removed.
+
+    ```python
+    def without_noise(self) -> stim.Circuit
+    ```
+  </Accordion>
+
+  <Accordion title="inverse() — reverse circuit">
+    Returns the circuit with operations inverted and in reverse order.
+
+    ```python
+    def inverse(self) -> stim.Circuit
+    ```
+
+    Raises `ValueError` if the circuit contains measurements or resets, which don't have clean inverses.
+  </Accordion>
+
+  <Accordion title="to_tableau() — convert to Tableau">
+    Converts a noise-free, measurement-free, reset-free circuit to a `stim.Tableau`.
+
+    ```python
+    def to_tableau(
+        self,
+        *,
+        ignore_noise: bool = False,
+        ignore_measurement: bool = False,
+        ignore_reset: bool = False,
+    ) -> stim.Tableau
+    ```
+  </Accordion>
+
+  <Accordion title="has_flow() and has_all_flows() — verify stabilizer flows">
+    Checks whether the circuit implements the given stabilizer flow(s).
+
+    ```python
+    def has_flow(self, flow: stim.Flow, *, unsigned: bool = False) -> bool
+    def has_all_flows(self, flows: Iterable[stim.Flow], *, unsigned: bool = False) -> bool
+    ```
+
+    ```python
+    import stim
+
+    stim.Circuit("H 0").has_flow(stim.Flow("X -> Z"))  # True
+    stim.Circuit("H 0").has_flow(stim.Flow("Z -> X"))  # True
+    ```
+  </Accordion>
+
+  <Accordion title="detecting_regions() — qubit sensitivity over time">
+    Returns a nested dictionary mapping each detector/observable to the Pauli sensitivity at each tick.
+
+    ```python
+    def detecting_regions(
+        self,
+        *,
+        targets: Optional[Iterable[Union[stim.DemTarget, str, Iterable[float]]]] = None,
+        ticks: Optional[Iterable[int]] = None,
+    ) -> Dict[stim.DemTarget, Dict[int, stim.PauliString]]
+    ```
+  </Accordion>
+</AccordionGroup>

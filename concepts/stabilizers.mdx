@@ -1,0 +1,198 @@
+---
+title: "Stabilizer formalism in Stim: PauliString and Tableau"
+description: "Understand how Stim represents Pauli strings and Clifford tableaus, and how to use PauliString, Tableau, and TableauSimulator in Python."
+---
+
+Stim is built around the stabilizer formalism, a compact way to represent quantum states and Clifford operations that scales polynomially rather than exponentially with qubit count. The two core data structures are `stim.PauliString`, which represents a tensor product of single-qubit Pauli operators, and `stim.Tableau`, which encodes how a Clifford operation transforms those Pauli operators under conjugation. Together they power every simulation and analysis feature in the library.
+
+## Pauli strings
+
+A Pauli string is a tensor product of single-qubit operators chosen from `{I, X, Y, Z}`, multiplied by a global phase factor of `+1`, `-1`, `+i`, or `-i`. Stim represents this as `stim.PauliString`.
+
+### Creating Pauli strings
+
+`stim.PauliString` accepts many input forms:
+
+```python
+import stim
+
+# From a dense string — '_' and 'I' both mean identity
+p1 = stim.PauliString("XYZ")
+p2 = stim.PauliString("-XYZ")   # Negated
+p3 = stim.PauliString("+iXYZ")  # Phase +i
+
+# From a sparse string using qubit indices
+p4 = stim.PauliString("-X2*Y6")  # X on qubit 2, Y on qubit 6, negative sign
+
+# From an integer (identity string of that length)
+p5 = stim.PauliString(5)        # +_____
+
+# From a list using convention 0=I, 1=X, 2=Y, 3=Z
+p6 = stim.PauliString([0, 1, 3, 2])  # +_XZY
+
+# From a dict mapping qubit index to Pauli
+p7 = stim.PauliString({0: "X", 2: "Y", 3: "X"})  # +X_YX
+```
+
+### Combining and inspecting
+
+Pauli strings can be multiplied (composing the tensor products and accumulating phase), and you can check commutation:
+
+```python
+import stim
+
+a = stim.PauliString("XX")
+b = stim.PauliString("ZZ")
+c = stim.PauliString("XZ")
+
+# Commutation — two Pauli strings commute iff they have an even number
+# of positions where both are non-identity and different.
+print(a.commutes(b))   # True  — XX and ZZ commute (two mismatched positions: XX anticommute twice → commute)
+print(a.commutes(c))   # False — XX and XZ anticommute (one mismatched position)
+
+# Multiply two Pauli strings term-by-term
+product = a * b
+print(product)  # stim.PauliString("-YY")
+
+# Length = number of qubits
+print(len(a))   # 2
+```
+
+<Note>
+`PauliString.commutes()` returns `True` if the two strings commute and `False` if they anti-commute. Anti-commutation is determined by counting positions where both strings have non-identity, non-equal Paulis: an odd count means they anti-commute.
+</Note>
+
+### Pauli strings and circuits
+
+You can propagate a Pauli string through a Clifford operation using `after()`:
+
+```python
+import stim
+
+p = stim.PauliString("XZ")
+# Conjugate by CNOT: what does XZ become after CNOT acts on it?
+result = p.after(stim.Tableau.from_named_gate("CNOT"), targets=[0, 1])
+print(result)
+```
+
+## Tableaus
+
+A `stim.Tableau` encodes a Clifford operation by recording where each single-qubit Pauli generator is sent under conjugation. For an n-qubit Clifford U, the tableau stores the 2n Pauli strings `U X_k U†` and `U Z_k U†` for each qubit k.
+
+### Creating tableaus
+
+```python
+import stim
+
+# Identity tableau on 3 qubits
+t_identity = stim.Tableau(3)
+print(t_identity)
+# +-xz-xz-xz-
+# | ++ ++ ++
+# | XZ __ __
+# | __ XZ __
+# | __ __ XZ
+
+# Named gate tableaus
+h = stim.Tableau.from_named_gate("H")
+print(h)
+# +-xz-
+# | ++
+# | ZX
+
+cnot = stim.Tableau.from_named_gate("CNOT")
+print(cnot)
+# +-xz-xz-
+# | ++ ++
+# | XZ _Z
+# | X_ XZ
+
+s = stim.Tableau.from_named_gate("S")
+print(s)
+# +-xz-
+# | ++
+# | YZ
+```
+
+### Composing tableaus
+
+Tableaus multiply in the same order as their corresponding unitaries:
+
+```python
+import stim
+
+s = stim.Tableau.from_named_gate("S")
+
+# S squared is Z
+print(s ** 2 == stim.Tableau.from_named_gate("Z"))  # True
+
+# S inverse is S_DAG
+print(s ** -1 == stim.Tableau.from_named_gate("S_DAG"))  # True
+
+# Compose two tableaus
+t1 = stim.Tableau.random(4)
+t2 = stim.Tableau.random(4)
+t3 = t2 * t1
+# Applying t3 is equivalent to applying t1 then t2
+p = stim.PauliString.random(4)
+print(t3(p) == t2(t1(p)))  # True
+```
+
+### Querying outputs
+
+You can ask what Pauli string a given X or Z generator maps to:
+
+```python
+import stim
+
+cnot = stim.Tableau.from_named_gate("CNOT")
+
+# Where does X on qubit 0 go?
+print(cnot.x_output(0))   # stim.PauliString("+XX")
+
+# Where does Z on qubit 1 go?
+print(cnot.z_output(1))   # stim.PauliString("+ZZ")
+```
+
+### Inverse tableaus
+
+Stim internally tracks the *inverse* tableau rather than the forward tableau. This is a detail of the Aaronson–Gottesman simulation algorithm that makes certain operations (like applying a gate to a few qubits of a large state) more efficient. The inverse tableau is accessible via `TableauSimulator.current_inverse_tableau`.
+
+<Tip>
+For deep dives into the algorithm, see Aaronson and Gottesman, "Improved Simulation of Stabilizer Circuits" (arXiv:quant-ph/0406196). Stim implements optimized variants of those ideas.
+</Tip>
+
+## TableauSimulator
+
+`stim.TableauSimulator` provides a general-purpose stabilizer simulator that you control step-by-step. Unlike the fast bulk samplers built on `stim.Circuit`, it is interactive: you apply gates one at a time and can inspect or manipulate the state between steps.
+
+```python
+import stim
+
+sim = stim.TableauSimulator()
+
+# Apply gates
+sim.h(0)
+sim.cnot(0, 1)
+
+# Measure
+result = sim.measure(0)
+print(result)   # True or False (random for a Bell state)
+
+# Inspect the full stabilizer state as a set of Pauli strings
+for stabilizer in sim.canonical_stabilizers():
+    print(stabilizer)
+
+# Read out the current inverse tableau
+inv_tab = sim.current_inverse_tableau
+print(len(inv_tab))   # Number of qubits being tracked
+```
+
+<AccordionGroup>
+  <Accordion title="When to use TableauSimulator vs. compile_sampler">
+    Use `stim.TableauSimulator` when you need interactive control — for example, to implement adaptive circuits where later gates depend on mid-circuit measurement outcomes. Use `circuit.compile_sampler()` or `circuit.compile_detector_sampler()` when you want to collect millions of shots from a fixed circuit as fast as possible; those paths are orders of magnitude faster for bulk sampling.
+  </Accordion>
+  <Accordion title="Noise in TableauSimulator">
+    `TableauSimulator` supports noise operations such as `depolarize1(p)`, `depolarize2(p)`, `x_error(p)`, and `z_error(p)`. These are useful for simulating non-Pauli noise models (such as amplitude damping) by manually decomposing them into Pauli operations and calling them at the right moments — something that cannot be expressed directly in the `.stim` circuit file format.
+  </Accordion>
+</AccordionGroup>

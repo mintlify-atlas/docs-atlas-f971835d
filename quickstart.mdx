@@ -1,81 +1,175 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
-icon: 'rocket'
+title: "Get started with Stim: your first stabilizer circuit"
+description: "Install Stim, build your first stabilizer circuit, sample measurements, add detector annotations, and sample detection events — all in Python."
 ---
 
-## Get started in three steps
+This guide walks you through Stim's core workflow: installing the package, defining a circuit, compiling a sampler, collecting measurement shots, annotating the circuit with detectors, and sampling detection events. All examples use Python and real Stim API calls. By the end you will have a working foundation for exploring quantum error correction simulations.
 
-Get your documentation site running locally and make your first customization.
+<Steps>
 
-### Step 1: Set up your local environment
+  <Step title="Install Stim">
+    Install Stim from PyPI. Stim requires Python 3.6 or later and pulls in NumPy automatically.
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    ```bash
+    pip install stim
+    ```
 
-### Step 2: Deploy your changes
+    Verify the installation:
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    ```python
+    import stim
+    print(stim.__version__)
+    ```
+  </Step>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+  <Step title="Create a circuit">
+    Circuits in Stim are instances of `stim.Circuit`. You can build one programmatically by calling `circuit.append(gate_name, targets)`, or you can pass the entire circuit as a string using Stim's circuit file syntax.
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    The example below prepares a Bell pair and then measures both qubits in the Z basis:
 
-### Step 3: Go live
+    ```python
+    import stim
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    circuit = stim.Circuit()
+
+    # Initialize a Bell pair.
+    circuit.append("H", [0])
+    circuit.append("CNOT", [0, 1])
+
+    # Measure both qubits.
+    circuit.append("M", [0, 1])
+    ```
+
+    Printing the circuit's `repr` shows it in Stim's circuit file syntax:
+
+    ```python
+    print(repr(circuit))
+    # stim.Circuit('''
+    #     H 0
+    #     CX 0 1
+    #     M 0 1
+    # ''')
+    ```
+
+    You can also visualize the circuit as an ASCII diagram:
+
+    ```python
+    print(circuit.diagram())
+    # q0: -H-@-M:rec[0]-
+    #        |
+    # q1: ---X-M:rec[1]-
+    ```
+  </Step>
+
+  <Step title="Compile a sampler and collect shots">
+    Call `circuit.compile_sampler()` to produce a compiled sampler object, then call `.sample(shots=N)` to collect `N` measurement shots. The returned array has shape `(shots, num_measurements)` with `bool` values.
+
+    ```python
+    sampler = circuit.compile_sampler()
+    results = sampler.sample(shots=10)
+    print(results)
+    # [[False False]
+    #  [ True  True]
+    #  [False False]
+    #  [False False]
+    #  [ True  True]
+    #  [False False]
+    #  [ True  True]
+    #  [False False]
+    #  [False False]
+    #  [ True  True]]
+    ```
+
+    Notice that each row's two values always agree — the Bell state measurement results are perfectly correlated, as expected.
+  </Step>
+
+  <Step title="Add detector annotations">
+    A `DETECTOR` annotation asserts that a particular parity of measurements is *consistent from shot to shot* under noiseless execution. You reference past measurements using `stim.target_rec(offset)`, where `rec[-1]` is the most recent measurement.
+
+    The Bell circuit's two measurements should always have the same value, so you can annotate their parity as a detector:
+
+    ```python
+    circuit.append("DETECTOR", [stim.target_rec(-1), stim.target_rec(-2)])
+    print(repr(circuit))
+    # stim.Circuit('''
+    #     H 0
+    #     CX 0 1
+    #     M 0 1
+    #     DETECTOR rec[-1] rec[-2]
+    # ''')
+    ```
+  </Step>
+
+  <Step title="Compile a detector sampler and sample detection events">
+    Use `circuit.compile_detector_sampler()` to create a detector sampler. Calling `.sample(shots=N)` returns an array of shape `(shots, num_detectors)` — `True` means the detector fired (a detection event occurred), `False` means it did not.
+
+    Without noise, detectors never fire:
+
+    ```python
+    det_sampler = circuit.compile_detector_sampler()
+    print(det_sampler.sample(shots=5))
+    # [[False]
+    #  [False]
+    #  [False]
+    #  [False]
+    #  [False]]
+    ```
+
+    Now rebuild the circuit with Pauli noise inserted using Stim's circuit string syntax, and watch detectors fire:
+
+    ```python
+    noisy_circuit = stim.Circuit("""
+        H 0
+        TICK
+
+        CX 0 1
+        X_ERROR(0.2) 0 1
+        TICK
+
+        M 0 1
+        DETECTOR rec[-1] rec[-2]
+    """)
+
+    noisy_sampler = noisy_circuit.compile_detector_sampler()
+    print(noisy_sampler.sample(shots=10))
+    # [[False]
+    #  [False]
+    #  [ True]
+    #  [ True]
+    #  [False]
+    #  [False]
+    #  [ True]
+    #  [ True]
+    #  [ True]
+    #  [False]]
+    ```
+
+    `True` values appear because the `X_ERROR(0.2)` channel flips each qubit independently with 20% probability, causing the two measurements to disagree roughly 32% of the time. You can estimate the detection fraction over many shots:
+
+    ```python
+    import numpy as np
+
+    shots = noisy_sampler.sample(shots=10**6)
+    print(np.sum(shots) / 10**6)
+    # ~0.32
+    ```
+  </Step>
+
+</Steps>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Circuits in depth" icon="book" href="/concepts/circuits">
+    Learn how Stim circuits are structured, how detectors and observables work, and how to use REPEAT blocks.
+  </Card>
+  <Card title="Sampling guide" icon="chart-bar" href="/guides/sampling">
+    Explore measurement sampling, detector sampling, and bulk data collection workflows in detail.
+  </Card>
+  <Card title="Detector error models" icon="diagram-project" href="/guides/detector-error-models">
+    Convert annotated noisy circuits into Tanner graphs for configuring matching decoders.
+  </Card>
+  <Card title="Python API — Circuit" icon="code" href="/reference/python/circuit">
+    Full reference for `stim.Circuit`, including all sampler methods and circuit-level operations.
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

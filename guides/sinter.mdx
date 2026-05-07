@@ -1,0 +1,273 @@
+---
+title: "Parallel QEC sampling with Sinter"
+description: "Use Sinter to run parallel Monte Carlo QEC experiments across multiple CPU cores, automatically collecting and saving logical error rate statistics."
+---
+
+**Sinter** is a companion library built on top of Stim for high-throughput Monte Carlo sampling of quantum error correction circuits. It handles the repetitive bookkeeping of a QEC experiment — distributing work across CPU cores, adaptively sizing batches, recording running statistics in a resumable CSV file, and plotting results — so you can focus on the circuits and decoders you care about.
+
+## Installation
+
+```bash
+pip install sinter
+```
+
+Installing `sinter` also makes the `sinter` command available on your `PATH` inside the active virtual environment. You will also need a decoder, for example:
+
+```bash
+pip install pymatching
+```
+
+---
+
+## How Sinter works
+
+Sinter takes one or more Stim circuits annotated with noise, detectors, and logical observables. For each circuit it:
+
+1. Generates the detector error model using `stim.Circuit.detector_error_model(decompose_errors=True)`.
+2. Configures the specified decoder from the DEM.
+3. Uses `stim` to sample detection events in batches.
+4. Passes each batch to the decoder and counts logical errors.
+5. Records cumulative statistics (`shots`, `errors`, `discards`, `seconds`) per circuit in CSV format.
+6. Repeats until the per-circuit stopping criteria (`max_shots` or `max_errors`) are satisfied.
+
+All of this happens in parallel across as many worker processes as you specify.
+
+---
+
+## Python API workflow
+
+### 1. Define tasks
+
+A `sinter.Task` bundles a circuit with optional metadata and decoder hints:
+
+```python
+import stim
+import sinter
+
+def generate_tasks():
+    for p in [0.001, 0.005, 0.01]:
+        for d in [3, 5]:
+            yield sinter.Task(
+                circuit=stim.Circuit.generated(
+                    "surface_code:rotated_memory_x",
+                    rounds=d,
+                    distance=d,
+                    after_clifford_depolarization=p,
+                ),
+                json_metadata={
+                    'p': p,
+                    'd': d,
+                },
+            )
+```
+
+### 2. Collect statistics
+
+Pass the tasks to `sinter.collect()`. It returns a list of `sinter.TaskStats` objects when all stopping criteria are met:
+
+```python
+samples = sinter.collect(
+    num_workers=4,
+    max_shots=1_000_000,
+    max_errors=1000,
+    tasks=generate_tasks(),
+    decoders=['pymatching'],
+)
+```
+
+Key parameters:
+
+| Parameter | Description |
+|---|---|
+| `num_workers` | Number of parallel worker processes |
+| `max_shots` | Stop sampling a circuit after this many shots |
+| `max_errors` | Stop sampling a circuit after this many logical errors |
+| `tasks` | Iterable of `sinter.Task` objects |
+| `decoders` | List of decoder names (e.g. `['pymatching']`) |
+
+### 3. Print and plot results
+
+```python
+import matplotlib.pyplot as plt
+
+# Print as CSV
+print(sinter.CSV_HEADER)
+for stat in samples:
+    print(stat.to_csv_line())
+
+# Plot error rate curves
+fig, ax = plt.subplots(1, 1)
+sinter.plot_error_rate(
+    ax=ax,
+    stats=samples,
+    group_func=lambda stat: f"d={stat.json_metadata['d']}",
+    x_func=lambda stat: stat.json_metadata['p'],
+)
+ax.loglog()
+ax.set_xlabel('Physical Error Rate')
+ax.set_ylabel('Logical Error Probability (per shot)')
+ax.set_title('Surface code threshold')
+ax.legend()
+fig.savefig('threshold.png')
+plt.show()
+```
+
+<Note>
+The code inside `sinter.collect()` calls must be inside a function guarded by `if __name__ == '__main__':`. Sinter uses Python multiprocessing, and without this guard the worker subprocesses will re-execute module-level code on startup.
+</Note>
+
+---
+
+## Complete example
+
+The following reproduces the example from the Sinter README:
+
+```python
+import stim
+import sinter
+import matplotlib.pyplot as plt
+
+
+def generate_example_tasks():
+    for p in [0.001, 0.005, 0.01]:
+        for d in [3, 5]:
+            yield sinter.Task(
+                circuit=stim.Circuit.generated(
+                    rounds=d,
+                    distance=d,
+                    after_clifford_depolarization=p,
+                    code_task='surface_code:rotated_memory_x',
+                ),
+                json_metadata={'p': p, 'd': d},
+            )
+
+
+def main():
+    samples = sinter.collect(
+        num_workers=4,
+        max_shots=1_000_000,
+        max_errors=1000,
+        tasks=generate_example_tasks(),
+        decoders=['pymatching'],
+    )
+
+    print(sinter.CSV_HEADER)
+    for sample in samples:
+        print(sample.to_csv_line())
+
+    fig, ax = plt.subplots(1, 1)
+    sinter.plot_error_rate(
+        ax=ax,
+        stats=samples,
+        group_func=lambda stat: f"Rotated Surface Code d={stat.json_metadata['d']}",
+        x_func=lambda stat: stat.json_metadata['p'],
+    )
+    ax.loglog()
+    ax.set_ylim(1e-5, 1)
+    ax.grid()
+    ax.set_title('Logical Error Rate vs Physical Error Rate')
+    ax.set_ylabel('Logical Error Probability (per shot)')
+    ax.set_xlabel('Physical Error Rate')
+    ax.legend()
+    fig.savefig('plot.png')
+    plt.show()
+
+
+if __name__ == '__main__':
+    main()
+```
+
+Example CSV output:
+
+```
+     shots,    errors,  discards, seconds,decoder,strong_id,json_metadata
+   1000000,       837,         0,    36.6,pymatching,9f7e20c...,"{""d"":3,""p"":0.001}"
+     53498,      1099,         0,    6.52,pymatching,3f40432...,"{""d"":3,""p"":0.005}"
+     16269,      1023,         0,    3.23,pymatching,17b2e0c...,"{""d"":3,""p"":0.01}"
+   1000000,       151,         0,    77.3,pymatching,e179a18...,"{""d"":5,""p"":0.001}"
+     61569,      1001,         0,    24.5,pymatching,2fefcc3...,"{""d"":5,""p"":0.005}"
+     11363,      1068,         0,    12.5,pymatching,a4dec28...,"{""d"":5,""p"":0.01}"
+```
+
+---
+
+## CLI usage
+
+<Tabs>
+  <Tab title="sinter collect">
+    Generate circuit files and collect statistics across all of them in parallel:
+
+    ```bash
+    # Generate circuits
+    mkdir -p circuits
+    python -c "
+    import stim
+    for p in [0.001, 0.005, 0.01]:
+        for d in [3, 5]:
+            with open(f'circuits/d={d},p={p},b=X,type=rotated_surface_memory.stim', 'w') as f:
+                c = stim.Circuit.generated(
+                    rounds=d, distance=d,
+                    after_clifford_depolarization=p,
+                    code_task='surface_code:rotated_memory_x')
+                print(c, file=f)
+    "
+
+    # Collect statistics (resumable)
+    sinter collect \
+        --processes auto \
+        --circuits circuits/*.stim \
+        --metadata_func auto \
+        --decoders pymatching \
+        --max_shots 1_000_000 \
+        --max_errors 1000 \
+        --save_resume_filepath stats.csv
+    ```
+
+    `--metadata_func auto` parses filenames like `d=3,p=0.001,b=X,type=rotated_surface_memory.stim` into a JSON dictionary automatically.
+
+    `--save_resume_filepath` enables **merge mode**: if the process is interrupted, restart it and it will pick up from where it left off without losing data.
+  </Tab>
+  <Tab title="sinter combine">
+    Sinter writes multiple rows per circuit as batch sizes grow. Combine them into one row per circuit:
+
+    ```bash
+    sinter combine stats.csv
+    ```
+  </Tab>
+  <Tab title="sinter plot">
+    Plot logical error rate curves from a CSV file:
+
+    ```bash
+    sinter plot \
+        --in stats.csv \
+        --group_func "f'''Rotated Surface Code d={m.d}'''" \
+        --x_func m.p \
+        --xaxis "[log]Physical Error Rate" \
+        --fig_size 1024 1024 \
+        --out surface_code_figure.png \
+        --show
+    ```
+
+    `m.key` is shorthand for `metadata.get('key', None)` inside `--group_func` and `--x_func` expressions.
+  </Tab>
+</Tabs>
+
+---
+
+## CSV output format
+
+Each row in the CSV file describes statistics accumulated for one (circuit, decoder) pair over some number of shots. Multiple rows with the same `strong_id` can be summed to get total statistics.
+
+| Column | Type | Description |
+|---|---|---|
+| `shots` | int | Total number of times the circuit was sampled |
+| `errors` | int | Number of shots where the decoder predicted the wrong logical observable |
+| `discards` | int | Shots discarded due to postselection (not counted as errors) |
+| `seconds` | float | Total CPU core-seconds spent sampling and decoding |
+| `decoder` | str | Name of the decoder used |
+| `strong_id` | str | Cryptographic hash of the circuit, DEM, decoder, and metadata — prevents accidentally merging rows from different circuits |
+| `json_metadata` | json | Free-form metadata associated with the task (e.g. `{"d": 3, "p": 0.001}`) |
+
+<Tip>
+Use `sinter.read_stats_from_csv_files(["stats.csv"])` to load saved statistics back into Python as a list of `sinter.TaskStats` objects for further analysis or plotting.
+</Tip>

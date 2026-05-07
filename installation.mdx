@@ -1,0 +1,147 @@
+---
+title: "Installing Stim: Python package, C++ library, and CLI"
+description: "Install Stim as a Python package via pip, build the command-line binary or C++ library from source using CMake, or link libstim into your own C++ project."
+---
+
+Stim ships in three forms: a Python package on PyPI (the most common way to use it), a standalone command-line binary, and a C++ library you can link into your own programs. The Python package is the recommended starting point for most users. The C++ library is useful when you need to embed Stim functionality directly in a C++ project, but be aware that the C++ API carries no backwards-compatibility guarantee.
+
+## Python package
+
+The Python package is available on [PyPI](https://pypi.org/project/stim/) and can be installed with a single command. It requires **Python 3.6 or later** and automatically installs NumPy as a dependency.
+
+<CodeGroup>
+
+```bash pip
+pip install stim
+```
+
+```bash pip (pinned version)
+pip install stim~=1.14
+```
+
+</CodeGroup>
+
+Verify the installation:
+
+```python
+import stim
+print(stim.__version__)
+```
+
+<Tip>
+  Pin to a minor version (e.g. `stim~=1.14`) in production environments. Stim guarantees backwards compatibility of the Python API within a major version (`1.X`), but the exact behavior of random seeding is intentionally changed between minor versions — pin the version if reproducible seeds matter to you.
+</Tip>
+
+## Command-line binary
+
+The Stim CLI accepts commands such as `stim sample -shots 100 -in circuit.stim`. You can build it from source using CMake, Bazel, or GCC.
+
+<CodeGroup>
+
+```bash CMake
+# From the repository root:
+cmake .
+make stim
+
+# Output binary ends up at:
+#   ./out/stim
+```
+
+```bash CMake (with install)
+# From the repository root:
+cmake .
+make stim
+make install
+
+# Installs to system default (e.g. /usr/local).
+# Control the path with -DCMAKE_INSTALL_PREFIX:
+#   cmake . -DCMAKE_INSTALL_PREFIX=/path/to/install
+```
+
+```bash Bazel
+bazel build stim
+```
+
+```bash GCC (manual)
+# From the repository root:
+find src \
+    | grep "\.cc$" \
+    | grep -v "\.\(test\|perf\|pybind\)\.cc$" \
+    | xargs g++ -I src -pthread -std=c++20 -O3 -march=native
+
+# Output binary ends up at:
+#   ./a.out
+```
+
+</CodeGroup>
+
+### SIMD width
+
+CMake lets you control vectorization via the `-DSIMD_WIDTH` flag:
+
+| Flag | Effect |
+|------|--------|
+| *(omitted)* | Use the best option for the current machine (`-march=native`) |
+| `-DSIMD_WIDTH=256` | Force 256-bit AVX2 operations |
+| `-DSIMD_WIDTH=128` | Force 128-bit SSE2 operations |
+| `-DSIMD_WIDTH=64` | Disable SIMD entirely |
+
+## C++ library
+
+To embed Stim in a C++ project, build `libstim` and link against it. The recommended approach is CMake with `FetchContent`.
+
+<Warning>
+  The C++ API makes **no backwards-compatibility guarantees**. It may change arbitrarily and without notice between minor versions. Always pin to a specific version tag, and prefer the Python API when backwards compatibility matters.
+</Warning>
+
+### Link with CMake
+
+In your `CMakeLists.txt`, fetch Stim from GitHub and add `libstim` as a link dependency:
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(stim
+    GIT_REPOSITORY https://github.com/quantumlib/stim.git
+    GIT_TAG v1.14.0)   # Pin to the version you need
+FetchContent_MakeAvailable(stim)
+
+# For any target that needs Stim:
+target_link_libraries(your_target PRIVATE libstim)
+```
+
+Then include Stim's header in your source files:
+
+```cpp
+#include "stim.h"
+
+stim::Circuit make_bell_pair_circuit() {
+    return stim::Circuit(R"CIRCUIT(
+        H 0
+        CNOT 0 1
+        M 0 1
+        DETECTOR rec[-1] rec[-2]
+    )CIRCUIT");
+}
+```
+
+### System requirements
+
+| Component | Requirement |
+|-----------|-------------|
+| Python package | Python ≥ 3.6, NumPy (installed automatically) |
+| C++ build | C++17-capable compiler (GCC, Clang, or MSVC); CMake or Bazel optional |
+| SIMD acceleration | AVX2 or SSE2 capable CPU (optional; falls back to scalar) |
+
+## Versioning and compatibility
+
+Stim's Python package uses **semantic versioning**. Within a major version (`1.X`):
+
+- The **Python API** is backwards compatible, except for bug fixes, trap fixes, and spandrels.
+- The **command-line API** is backwards compatible under the same exceptions; a command will not stop working due to cleanup efforts alone.
+- The **C++ API** carries **no compatibility guarantee** and may change arbitrarily between minor versions.
+
+Random seeding behavior is explicitly *not* stable between minor versions — the same seed may produce different results across versions. This is by design and enforced intentionally.
+
+<Note>
+  Stim is not an officially supported Google product. For questions, use the [quantum computing Stack Exchange](https://quantumcomputing.stackexchange.com) with the `stim` tag.
+</Note>

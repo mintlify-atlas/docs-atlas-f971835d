@@ -1,0 +1,546 @@
+---
+title: "stim.DetectorErrorModel — Tanner graph API"
+description: "API reference for stim.DetectorErrorModel: enumerate error mechanisms, inspect DemInstruction and DemTarget, do arithmetic, and sample directly from a DEM."
+---
+
+`stim.DetectorErrorModel` (DEM) describes a quantum error correction code as an explicit list of independent error mechanisms, each of which flips a specific set of detectors and logical observables with some probability. It is the primary interface between Stim and matching-based decoders such as PyMatching. A DEM is produced from a circuit via `circuit.detector_error_model()` and can also be constructed directly from its text format.
+
+## Constructor
+
+<AccordionGroup>
+  <Accordion title="stim.DetectorErrorModel(text='') — from text">
+    Creates a `DetectorErrorModel` from DEM format text, or an empty model if no text is provided.
+
+    ```python
+    def __init__(self, detector_error_model_text: str = '') -> None
+    ```
+
+    ```python
+    import stim
+
+    dem = stim.DetectorErrorModel('''
+        error(0.1) D0
+        error(0.1) D0 D1 L0
+        error(0.1) D1 D2
+        error(0.1) D2
+    ''')
+    print(len(dem))  # 4
+    ```
+  </Accordion>
+
+  <Accordion title="stim.DetectorErrorModel.from_file() — load from disk">
+    Reads a DEM from a `.dem` file or file-like object.
+
+    ```python
+    @staticmethod
+    def from_file(
+        file: Union[io.TextIOBase, str, pathlib.Path],
+    ) -> stim.DetectorErrorModel
+    ```
+
+    ```python
+    import stim
+
+    dem = stim.DetectorErrorModel.from_file("my_circuit.dem")
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Iterating instructions
+
+A `DetectorErrorModel` can be iterated to access its top-level instructions and repeat blocks. Each item is either a `stim.DemInstruction` or a `stim.DemRepeatBlock`.
+
+```python
+import stim
+
+dem = stim.DetectorErrorModel('''
+    error(0.1) D0 D1
+    error(0.1) D1 L0
+    repeat 100 {
+        error(0.05) D0 D1
+        shift_detectors 1
+    }
+    logical_observable L0
+''')
+
+for item in dem:
+    if isinstance(item, stim.DemRepeatBlock):
+        print(f"repeat {item.repeat_count} {{ ... }}")
+    else:
+        print(f"{item.type}  {item}")
+```
+
+<Note>
+  Only top-level instructions are yielded. Instructions inside `repeat` blocks are accessed through `block.body_copy()`.
+</Note>
+
+### DemInstruction types
+
+| Type string | Description |
+|-------------|-------------|
+| `"error"` | An error mechanism with probability and targets |
+| `"detector"` | Declares a detector (optional coordinate annotation) |
+| `"logical_observable"` | Declares a logical observable |
+| `"shift_detectors"` | Shifts the detector index offset |
+
+---
+
+## stim.DemInstruction
+
+Represents a single instruction in a detector error model.
+
+<AccordionGroup>
+  <Accordion title="DemInstruction.type — instruction type name">
+    Returns the instruction type as a string: `"error"`, `"detector"`, `"logical_observable"`, or `"shift_detectors"`.
+
+    ```python
+    @property
+    def type(self) -> str
+    ```
+
+    ```python
+    import stim
+
+    inst = stim.DetectorErrorModel("error(0.1) D0 D1")[0]
+    inst.type   # "error"
+    ```
+  </Accordion>
+
+  <Accordion title="DemInstruction.args_copy() — probability and parameters">
+    Returns the instruction's numeric arguments (e.g. the error probability).
+
+    ```python
+    def args_copy(self) -> List[float]
+    ```
+
+    ```python
+    import stim
+
+    inst = stim.DetectorErrorModel("error(0.125) D0 L2")[0]
+    inst.args_copy()   # [0.125]
+    ```
+  </Accordion>
+
+  <Accordion title="DemInstruction.targets_copy() — instruction targets">
+    Returns a copy of the instruction's targets as a list of `stim.DemTarget` objects.
+
+    ```python
+    def targets_copy(self) -> List[stim.DemTarget]
+    ```
+
+    ```python
+    import stim
+
+    inst = stim.DetectorErrorModel("error(0.125) D0 L2")[0]
+    targets = inst.targets_copy()
+    # [stim.DemTarget('D0'), stim.DemTarget('L2')]
+    ```
+  </Accordion>
+
+  <Accordion title="DemInstruction.target_groups() — decomposed error components">
+    Returns the targets split into groups separated by `^` separators. Used when `decompose_errors=True` was specified; each group is one component of the decomposed error.
+
+    ```python
+    def target_groups(self) -> List[List[stim.DemTarget]]
+    ```
+
+    ```python
+    import stim
+
+    dem = stim.DetectorErrorModel("error(0.1) D0 D1 ^ D2 D3")
+    groups = dem[0].target_groups()
+    # [[D0, D1], [D2, D3]]
+    ```
+  </Accordion>
+
+  <Accordion title="DemInstruction.tag — optional annotation">
+    Returns the optional string tag attached to the instruction.
+
+    ```python
+    @property
+    def tag(self) -> str
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## stim.DemRepeatBlock
+
+Represents a `repeat N { ... }` block in a detector error model.
+
+<AccordionGroup>
+  <Accordion title="DemRepeatBlock.repeat_count — iteration count">
+    ```python
+    @property
+    def repeat_count(self) -> int
+    ```
+  </Accordion>
+
+  <Accordion title="DemRepeatBlock.body_copy() — block contents">
+    Returns the body of the repeat block as a `stim.DetectorErrorModel`.
+
+    ```python
+    def body_copy(self) -> stim.DetectorErrorModel
+    ```
+
+    ```python
+    import stim
+
+    dem = stim.DetectorErrorModel('''
+        repeat 100 {
+            error(0.1) D0 D1
+            shift_detectors 1
+        }
+    ''')
+    block = dem[0]
+    print(block.repeat_count)   # 100
+    print(block.body_copy())    # DetectorErrorModel with 2 instructions
+    ```
+  </Accordion>
+
+  <Accordion title="DemRepeatBlock.type — always 'repeat'">
+    ```python
+    @property
+    def type(self) -> str  # always "repeat"
+    ```
+
+    Exists for duck-typing convenience: both `DemInstruction` and `DemRepeatBlock` expose `.type`.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## stim.DemTarget
+
+Represents a single target in a DEM instruction: a relative detector ID (`D5`), a logical observable ID (`L2`), or a separator (`^`).
+
+<AccordionGroup>
+  <Accordion title="DemTarget constructors">
+    ```python
+    # Parse from string
+    stim.DemTarget("D5")   # relative detector id 5
+    stim.DemTarget("L2")   # logical observable id 2
+    stim.DemTarget("^")    # separator
+
+    # Factory methods
+    stim.DemTarget.relative_detector_id(5)     # D5
+    stim.DemTarget.logical_observable_id(2)    # L2
+    stim.DemTarget.separator()                 # ^
+    ```
+  </Accordion>
+
+  <Accordion title="is_relative_detector_id() — detector check">
+    Returns `True` if this target is a relative detector ID (prefixed by `D` in DEM text).
+
+    ```python
+    def is_relative_detector_id(self) -> bool
+    ```
+
+    ```python
+    import stim
+
+    stim.DemTarget("D3").is_relative_detector_id()   # True
+    stim.DemTarget("L2").is_relative_detector_id()   # False
+    stim.DemTarget("^").is_relative_detector_id()    # False
+    ```
+  </Accordion>
+
+  <Accordion title="is_logical_observable_id() — observable check">
+    Returns `True` if this target is a logical observable ID (prefixed by `L`).
+
+    ```python
+    def is_logical_observable_id(self) -> bool
+    ```
+
+    ```python
+    import stim
+
+    stim.DemTarget("L2").is_logical_observable_id()   # True
+    stim.DemTarget("D3").is_logical_observable_id()   # False
+    ```
+  </Accordion>
+
+  <Accordion title="is_separator() — separator check">
+    Returns `True` if this target is the `^` separator between error decomposition components.
+
+    ```python
+    def is_separator(self) -> bool
+    ```
+  </Accordion>
+
+  <Accordion title="relative_detector_id() — static factory">
+    Returns a `DemTarget` representing a relative detector with the given index.
+
+    ```python
+    @staticmethod
+    def relative_detector_id(index: int) -> stim.DemTarget
+    ```
+
+    ```python
+    import stim
+
+    m = stim.DetectorErrorModel()
+    m.append("error", 0.25, [stim.DemTarget.relative_detector_id(13)])
+    print(repr(m))
+    # stim.DetectorErrorModel('''
+    #     error(0.25) D13
+    # ''')
+    ```
+  </Accordion>
+
+  <Accordion title="val — raw integer value">
+    Returns the integer index stored in the target (the number after `D` or `L`).
+
+    ```python
+    @property
+    def val(self) -> int
+    ```
+
+    ```python
+    stim.DemTarget("D5").val   # 5
+    stim.DemTarget("L6").val   # 6
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Arithmetic
+
+<AccordionGroup>
+  <Accordion title="__add__ and __iadd__ — concatenation">
+    Concatenates two DEMs, producing a new model with all instructions from both.
+
+    ```python
+    def __add__(self, second: stim.DetectorErrorModel) -> stim.DetectorErrorModel
+    def __iadd__(self, second: stim.DetectorErrorModel) -> stim.DetectorErrorModel
+    ```
+
+    ```python
+    import stim
+
+    m1 = stim.DetectorErrorModel("error(0.1) D0")
+    m2 = stim.DetectorErrorModel("error(0.2) D1")
+    combined = m1 + m2
+    ```
+  </Accordion>
+
+  <Accordion title="__mul__ and __imul__ — repetition">
+    Wraps the DEM contents into a `repeat` block.
+
+    ```python
+    def __mul__(self, repetitions: int) -> stim.DetectorErrorModel
+    def __imul__(self, repetitions: int) -> stim.DetectorErrorModel
+    ```
+
+    ```python
+    import stim
+
+    m = stim.DetectorErrorModel('''
+        error(0.1) D0 D1
+        shift_detectors 1
+    ''')
+    repeated = m * 100  # repeat 100 { ... }
+    ```
+  </Accordion>
+
+  <Accordion title="approx_equals() — fuzzy comparison">
+    Returns `True` if two DEMs are equal up to small perturbations of error probabilities within an absolute tolerance.
+
+    ```python
+    def approx_equals(self, other: object, *, atol: float) -> bool
+    ```
+
+    ```python
+    import stim
+
+    m1 = stim.DetectorErrorModel("error(0.1) D0")
+    m2 = stim.DetectorErrorModel("error(0.1001) D0")
+    m1.approx_equals(m2, atol=0.001)   # True
+    m1.approx_equals(m2, atol=0.00001) # False
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Properties
+
+<CardGroup cols={2}>
+  <Card title="num_detectors" icon="triangle-exclamation">
+    `int` — Number of detectors referenced in the model.
+  </Card>
+  <Card title="num_observables" icon="eye">
+    `int` — Number of logical observables referenced in the model.
+  </Card>
+  <Card title="num_errors" icon="bug">
+    `int` — Number of `error` instructions (including those inside repeat blocks).
+  </Card>
+</CardGroup>
+
+## Sampling
+
+<AccordionGroup>
+  <Accordion title="compile_sampler() — sample directly from a DEM">
+    Returns a `stim.CompiledDemSampler` that can sample detection event and observable flip data directly from the error model, without a circuit.
+
+    ```python
+    def compile_sampler(
+        self,
+        *,
+        seed: object = None,
+        held_in_memory: bool = False,
+    ) -> stim.CompiledDemSampler
+    ```
+
+    ```python
+    import stim
+
+    dem = stim.DetectorErrorModel('''
+        error(0.1) D0 D1 L0
+        error(0.1) D1 D2
+        error(0.1) D2
+    ''')
+    sampler = dem.compile_sampler()
+    dets, obs = sampler.sample(shots=1000, separate_observables=True)
+    # dets.shape == (1000, 3), dtype=bool_
+    # obs.shape  == (1000, 1), dtype=bool_
+    ```
+
+    <Tip>
+      Use `compiled_detector_sampler()` on the original circuit if you want correlated errors to be correctly reproduced. `compile_sampler()` on a DEM samples errors independently according to the DEM's stated probabilities.
+    </Tip>
+  </Accordion>
+</AccordionGroup>
+
+## I/O and utility
+
+<AccordionGroup>
+  <Accordion title="to_file() — save to disk">
+    Writes the DEM to a file path or file-like object.
+
+    ```python
+    def to_file(
+        self,
+        file: Union[io.TextIOBase, str, pathlib.Path],
+    ) -> None
+    ```
+
+    ```python
+    import stim
+
+    dem = stim.DetectorErrorModel("error(0.1) D0 L0")
+    dem.to_file("my_model.dem")
+    ```
+  </Accordion>
+
+  <Accordion title="flattened() — expand repeat blocks">
+    Returns an equivalent DEM with all `repeat` blocks expanded inline.
+
+    ```python
+    def flattened(self) -> stim.DetectorErrorModel
+    ```
+  </Accordion>
+
+  <Accordion title="rounded() — round probabilities">
+    Returns a copy with all error probabilities rounded to the given number of digits.
+
+    ```python
+    def rounded(self, digits: int) -> stim.DetectorErrorModel
+    ```
+  </Accordion>
+
+  <Accordion title="shortest_graphlike_error() — minimum error weight">
+    Finds the minimum number of graphlike errors needed to produce an undetected logical error.
+
+    ```python
+    def shortest_graphlike_error(
+        self,
+        *,
+        ignore_ungraphlike_errors: bool = True,
+    ) -> List[stim.DemInstruction]
+    ```
+
+    ```python
+    import stim
+
+    circuit = stim.Circuit.generated(
+        "repetition_code:memory",
+        rounds=10,
+        distance=7,
+        before_round_data_depolarization=0.01,
+    )
+    dem = circuit.detector_error_model(decompose_errors=True)
+    errors = dem.shortest_graphlike_error()
+    print(f"Distance upper bound: {len(errors)}")
+    ```
+  </Accordion>
+
+  <Accordion title="get_detector_coordinates() — spatial coordinates">
+    Returns the coordinate metadata of detectors in the model as a dictionary from detector index to coordinate list.
+
+    ```python
+    def get_detector_coordinates(
+        self,
+        only: object = None,
+    ) -> Dict[int, List[float]]
+    ```
+  </Accordion>
+
+  <Accordion title="append() — add instructions programmatically">
+    Appends an instruction or block to the model.
+
+    ```python
+    def append(
+        self,
+        instruction: object,
+        parens_arguments: object = None,
+        targets: List[object] = (),
+        *,
+        tag: str = '',
+    ) -> None
+    ```
+
+    ```python
+    import stim
+
+    m = stim.DetectorErrorModel()
+    m.append("error", 0.25, [
+        stim.DemTarget.relative_detector_id(0),
+        stim.DemTarget.logical_observable_id(0),
+    ])
+    m.append("shift_detectors", [], [1])
+    print(m)
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Common workflow
+
+```python
+import stim
+
+# 1. Build and annotate a circuit
+circuit = stim.Circuit.generated(
+    "surface_code:rotated_memory_x",
+    distance=5,
+    rounds=10,
+    after_clifford_depolarization=0.001,
+)
+
+# 2. Convert to DEM for a matching decoder
+dem = circuit.detector_error_model(decompose_errors=True)
+print(f"Detectors: {dem.num_detectors}")
+print(f"Error mechanisms: {dem.num_errors}")
+
+# 3. Inspect error terms
+for item in dem:
+    if hasattr(item, 'type') and item.type == "error":
+        prob = item.args_copy()[0]
+        targets = [str(t) for t in item.targets_copy() if not t.is_separator()]
+        print(f"p={prob:.4f}  targets={targets}")
+        break  # just show the first one
+
+# 4. Sample detection events for the decoder
+sampler = circuit.compile_detector_sampler()
+det_events, obs_flips = sampler.sample(shots=10_000, separate_observables=True)
+```

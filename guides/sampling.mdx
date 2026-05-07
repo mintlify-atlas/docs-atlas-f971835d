@@ -1,0 +1,185 @@
+---
+title: "Sampling measurement and detection data"
+description: "Learn how to batch-sample raw measurements and detection events from Stim circuits using compiled samplers and file-backed output."
+---
+
+Stim provides two primary sampling paths for noisy stabilizer circuits: **measurement sampling**, which returns raw qubit measurement results, and **detection event sampling**, which returns the XOR-compared detector outcomes that decoders actually consume. Both paths compile a circuit once and then produce many shots efficiently using a frame-simulator under the hood.
+
+## Measurement sampling
+
+`circuit.compile_sampler()` compiles the circuit into a `CompiledMeasurementSampler`. Calling `sampler.sample(shots)` returns a `numpy` boolean array of shape `(shots, num_measurements)`, where `result[s, m]` is the outcome of measurement `m` in shot `s`.
+
+```python
+import stim
+
+circuit = stim.Circuit('''
+    X 2
+    M 0 1 2
+''')
+
+sampler = circuit.compile_sampler()
+results = sampler.sample(shots=5)
+# results.shape == (5, 3)
+# results.dtype == bool_
+print(results)
+```
+
+<Note>
+The sampler internally XORs a noiseless *reference sample* (obtained by running the circuit without noise) into the frame-simulator's flip output. This ensures the returned values are true measurement outcomes, not just flip indicators. You can skip the reference-sample step with `skip_reference_sample=True` if you know the all-zeros result is valid for your circuit.
+</Note>
+
+### Writing measurements to a file
+
+For large datasets that don't fit comfortably in memory, `sample_write` streams directly to disk:
+
+```python
+import stim
+import tempfile
+
+circuit = stim.Circuit('''
+    X 0   2 3
+    M 0 1 2 3
+''')
+
+with tempfile.TemporaryDirectory() as d:
+    path = f"{d}/measurements.dat"
+    circuit.compile_sampler().sample_write(
+        shots=1_000_000,
+        filepath=path,
+        format="b8",  # bit-packed binary — compact for large datasets
+    )
+```
+
+---
+
+## Detection event sampling
+
+Detection events are what most decoders expect: a `1` in position `d` means detector `d` fired (its parity differed from the noiseless expectation). `circuit.compile_detector_sampler()` compiles a `CompiledDetectorSampler` from a circuit that contains `DETECTOR` and `OBSERVABLE_INCLUDE` annotations.
+
+```python
+import stim
+
+circuit = stim.Circuit('''
+    H 0
+    CNOT 0 1
+    X_ERROR(0.1) 0
+    M 0 1
+    DETECTOR rec[-1] rec[-2]
+    OBSERVABLE_INCLUDE(0) rec[-1]
+''')
+
+sampler = circuit.compile_detector_sampler()
+
+# Returns (detection_events, observable_flips) as separate arrays
+dets, obs = sampler.sample(shots=1000, separate_observables=True)
+# dets.shape == (1000, num_detectors)
+# obs.shape  == (1000, num_observables)
+print(dets[:3])
+print(obs[:3])
+```
+
+<Tip>
+Pass `separate_observables=True` so the decoder can receive detection events and ground-truth observable flips as two distinct arrays. This is the most common pattern when evaluating a decoder's logical error rate.
+</Tip>
+
+### Writing detection events to a file
+
+```python
+import stim
+import tempfile
+
+circuit = stim.Circuit('''
+    X_ERROR(1) 0
+    M 0 1
+    DETECTOR rec[-2]
+    DETECTOR rec[-1]
+''')
+
+with tempfile.TemporaryDirectory() as d:
+    path = f"{d}/detections.dat"
+    circuit.compile_detector_sampler().sample_write(
+        shots=3,
+        filepath=path,
+        format="dets",
+    )
+    with open(path) as f:
+        print(f.read())
+# shot D0
+# shot D0
+# shot D0
+```
+
+---
+
+## Converting measurements to detection events
+
+If you already have a file of raw measurements (for example, from real hardware or a different simulator), use `circuit.compile_m2d_converter()` to obtain a `CompiledMeasurementsToDetectionEventsConverter`:
+
+```python
+import stim
+import numpy as np
+
+converter = stim.Circuit('''
+    X 0
+    M 0
+    DETECTOR rec[-1]
+''').compile_m2d_converter()
+
+# measurements.shape == (shots, num_measurements)
+measurements = np.array([[0], [1]], dtype=np.bool_)
+detection_events = converter.convert(
+    measurements=measurements,
+    append_observables=False,
+)
+print(detection_events)
+# [[ True]
+#  [False]]
+```
+
+The converter uses a noiseless reference sample to determine each detector's expected (noiseless) value, then XORs it against the supplied measurement data to produce the events.
+
+---
+
+## Output formats
+
+Both `sample_write` and `sample_write` for the detection sampler accept a `format` argument:
+
+<AccordionGroup>
+  <Accordion title='"01" — ASCII text (default)'>
+    One character per measurement per shot, newline-separated. `0` = False, `1` = True. Human-readable but large on disk.
+  </Accordion>
+  <Accordion title='"b8" — bit-packed binary'>
+    8 measurements packed per byte, little-endian. Compact; good for large shot counts when streaming to disk.
+  </Accordion>
+  <Accordion title='"ptb64" — transposed bit-packed, 64-bit words'>
+    Transposes the shot/measurement matrix before bit-packing. Efficient for SIMD decoding pipelines that process all shots for one detector at a time.
+  </Accordion>
+  <Accordion title='"hits" — sparse hit list'>
+    Lists only the indices of `True` measurements on each line. Compact when error rates are low.
+  </Accordion>
+  <Accordion title='"dets" — detection event list'>
+    Like `hits` but labels entries with `D` (detector) or `L` (logical observable). Readable format for detection events.
+  </Accordion>
+  <Accordion title='"r8" — run-length encoded'>
+    Encodes distances between consecutive `True` measurements. Compact for very sparse data.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Reference samples
+
+`circuit.reference_sample()` returns a noiseless, deterministic measurement result by discarding all noise operations and biasing all collapse events toward `+Z`:
+
+```python
+import stim
+
+ref = stim.Circuit('''
+    X 1
+    M 0 1
+''').reference_sample()
+
+print(ref)  # array([False,  True])
+```
+
+The reference sample is used internally by both `compile_sampler` and `compile_m2d_converter` as the baseline against which noisy samples are compared. You can also pass a pre-computed reference sample directly to `compile_sampler(reference_sample=...)` to avoid recomputing it.

@@ -1,0 +1,313 @@
+---
+title: "Stim circuit file format (.stim)"
+description: "Reference for the .stim UTF-8 text format: instruction syntax, target types, broadcasting rules, REPEAT blocks, and annotated circuit examples."
+---
+
+A `.stim` file is a UTF-8 encoded, human-readable specification of an annotated stabilizer circuit. It describes the gates applied to qubits, any noise processes to include during simulation, and annotations that enable detection-event sampling, circuit drawing, and spacetime layout hints. The file format is executed top-to-bottom, one instruction at a time.
+
+## Encoding
+
+Stim circuit files are always encoded using UTF-8. Non-ASCII characters may only appear inside comments and inside instruction tags; they are not valid in gate names, arguments, or targets.
+
+## Syntax
+
+A `.stim` file is a sequence of lines. Each line is one of:
+
+- **Blank** — ignored
+- **Instruction** — a gate applied to targets
+- **Block initiator** — an instruction followed by `{` on the same line
+- **Block terminator** — a `}` on its own line
+
+Lines may be indented with spaces or tabs, and may end with a comment beginning with `#`. Indentation and comments are purely decorative and carry no semantic meaning.
+
+```
+<CIRCUIT>      ::= <LINE>*
+<LINE>         ::= <INDENT> (<INSTRUCTION> | <BLOCK_START> | <BLOCK_END>)? <COMMENT>? '\n'
+<INDENT>       ::= /[ \t]*/
+<COMMENT>      ::= '#' /[^\n]*/
+<BLOCK_START>  ::= <INSTRUCTION> /[ \t]*/ '{'
+<BLOCK_END>    ::= '}'
+```
+
+### Instructions
+
+An instruction consists of:
+
+1. A **name** — starts with a letter, followed by letters, digits, and underscores. Names are case-insensitive.
+2. An optional **tag** — an arbitrary string inside square brackets, e.g. `[100ns]`.
+3. An optional parenthesized **argument list** — comma-separated floating-point numbers.
+4. A space-separated **target list**.
+
+```
+<INSTRUCTION>      ::= <NAME> <TAG>? <PARENS_ARGUMENTS>? <TARGETS>
+<TAG>              ::= '[' /[^\r\]\n]/* ']'
+<PARENS_ARGUMENTS> ::= '(' <ARGUMENTS> ')'
+<ARGUMENTS>        ::= /[ \t]*/ <ARG> /[ \t]*/ (',' <ARGUMENTS>)?
+<TARGETS>          ::= /[ \t]+/ <TARG> <TARGETS>?
+<NAME>             ::= /[a-zA-Z][a-zA-Z0-9_]*/
+<ARG>              ::= <double>
+```
+
+**Example:** `X_ERROR[test](0.1) 5 6` — name `X_ERROR`, tag `test`, argument `0.1`, targets `5` and `6`.
+
+#### Tag escape sequences
+
+Inside a tag, the following characters must be escaped:
+
+| Character | Escape sequence |
+|-----------|----------------|
+| `]` | `\C` |
+| `\r` (carriage return) | `\r` |
+| `\n` (line feed) | `\n` |
+| `\` (backslash) | `\B` |
+
+Tags have no effect on circuit execution. They are intended for use by external tools — for example, a noise-insertion tool might read `TICK[100ns]` to learn the duration of a time step.
+
+### Target types
+
+<Tabs>
+
+<Tab title="Qubit targets">
+
+A qubit target is a non-negative integer identifying a qubit by index. Qubits are implicitly allocated; the number of qubits is determined by the largest qubit index referenced in the file.
+
+```
+<QUBIT_TARGET> ::= '!'? <uint>
+```
+
+A `!` prefix inverts the recorded measurement result for that qubit. For example, `M 0 !1` measures qubit 0 and qubit 1, recording the result for qubit 1 as flipped.
+
+```stim
+# Measure qubit 0 normally and qubit 1 with inverted result
+M 0 !1
+```
+
+</Tab>
+
+<Tab title="Measurement record targets">
+
+A measurement record target references a past measurement result relative to the current end of the measurement record. `rec[-1]` is the most recent result, `rec[-2]` is the second most recent, and so on. Negative indices match Python list semantics, which allows loops to reference measurements without knowing absolute positions.
+
+```
+<MEASUREMENT_RECORD_TARGET> ::= "rec[-" <uint> "]"
+```
+
+It is an error to reference a result so far back that it would precede the start of the circuit.
+
+```stim
+# Feed forward: apply CZ conditioned on the most recent measurement
+M 0
+CZ rec[-1] 5
+
+# Classical correction in quantum teleportation
+M 0 1
+CZ rec[-2] 99
+CNOT rec[-1] 99
+```
+
+</Tab>
+
+<Tab title="Sweep bit targets">
+
+A sweep bit target references a column of a per-shot configuration table. It allows the same circuit to behave differently across shots — for example, recording which spin-echo operations were applied.
+
+```
+<SWEEP_BIT_TARGET> ::= "sweep[" <uint> "]"
+```
+
+Sweep bits default to `False` when no table is provided, and bits beyond the end of the provided table also default to `False`.
+
+```stim
+# Apply X to qubit 1 for shots where sweep bit 5 is set
+CNOT sweep[5] 1
+```
+
+</Tab>
+
+<Tab title="Pauli targets">
+
+A Pauli target is a qubit index prefixed by `X`, `Y`, or `Z`. Pauli targets are used with instructions like `CORRELATED_ERROR` and `MPP` to specify Pauli product operators. Multiple Pauli targets in a product are joined with `*` combiners. A `!` prefix inverts the measurement result for that product group.
+
+```
+<PAULI_TARGET>   ::= '!'? /[XYZ]/ <uint>
+<COMBINER_TARGET> ::= '*'
+```
+
+```stim
+# Apply a correlated X⊗Y⊗Z error with probability 1%
+CORRELATED_ERROR(0.01) X0 Y1 Z2
+
+# Measure X0*Z2 and invert the result, then measure Y3
+MPP !X0*Z2 Y3
+```
+
+</Tab>
+
+</Tabs>
+
+## Broadcasting
+
+When a gate receives more targets than a single application requires, it is **broadcast** over those targets.
+
+- **Single-qubit gates** — applied to each target in order. `H 0 1 2` is equivalent to `H 0` then `H 1` then `H 2`.
+- **Two-qubit gates** — applied to aligned target pairs in order. `CNOT 0 1 2 3` is equivalent to `CNOT 0 1` then `CNOT 2 3`. Giving a two-qubit gate an odd number of targets is an error.
+
+```stim
+# Broadcast H over three qubits
+H 0 1 2
+
+# Broadcast CNOT over two pairs
+CNOT 0 1 2 3
+
+# Broadcast depolarizing noise over pairs
+DEPOLARIZE2(0.001) 0 1 2 3
+```
+
+## State space
+
+A Stim simulator executing a circuit tracks three things:
+
+1. **The qubits** — all start in the |0⟩ state. The qubit count is inferred from the largest qubit index in the circuit.
+2. **The measurement record** — an immutable append-only log of all measurement results. Referenced by `rec[-n]` targets.
+3. **The "correlated error occurred" flag** — a hidden boolean used by `ELSE_CORRELATED_ERROR` to condition on whether the preceding `CORRELATED_ERROR` fired.
+
+An optional coordinate offset, accumulated by `SHIFT_COORDS`, affects `DETECTOR` coordinate arguments and `QUBIT_COORDS` annotations but has no effect on simulation results.
+
+## REPEAT blocks
+
+A `REPEAT K { ... }` block repeats its body exactly `K` times. `K` must be a positive integer — `REPEAT 0` is a syntax error because it creates ambiguity about whether detectors and observables declared inside the block exist.
+
+```stim
+REPEAT 1000 {
+    CX 0 1 2 3 4 5
+    CX 2 1 4 3 6 5
+    MR 1 3 5
+    SHIFT_COORDS(0, 1)
+    DETECTOR(1, 0) rec[-3] rec[-6]
+    DETECTOR(3, 0) rec[-2] rec[-5]
+    DETECTOR(5, 0) rec[-1] rec[-4]
+}
+```
+
+Blocks can be nested. The `{` must appear on the same line as the instruction; the `}` must appear on its own line.
+
+## Examples
+
+<AccordionGroup>
+
+<Accordion title="Quantum teleportation">
+
+This circuit distributes a Bell pair, performs a Bell-basis measurement on the sender's side, and applies feed-forward corrections to the receiver's qubit (qubit 99).
+
+```stim
+# Distribute a Bell Pair.
+H 0
+CNOT 0 99
+
+# Sender creates an arbitrary qubit state to send.
+H 1
+S 1
+
+# Sender performs a Bell Basis measurement.
+CNOT 0 1
+H 0
+M 0 1  # Measure both of the sender's qubits.
+
+# Receiver performs frame corrections based on measurement results.
+CZ rec[-2] 99
+CNOT rec[-1] 99
+```
+
+</Accordion>
+
+<Accordion title="Repetition code">
+
+This circuit measures the parities of adjacent data qubits (0, 2, 4, 6) using measurement qubits (1, 3, 5), then repeats 1000 more rounds. The `DETECTOR` annotations declare detection events and the `OBSERVABLE_INCLUDE` annotation declares the logical observable.
+
+```stim
+# Measure the parities of adjacent data qubits.
+# Data qubits are 0, 2, 4, 6.
+# Measurement qubits are 1, 3, 5.
+CNOT 0 1 2 3 4 5
+CNOT 2 1 4 3 6 5
+MR 1 3 5
+
+# Annotate that the measurements should be deterministic.
+DETECTOR rec[-3]
+DETECTOR rec[-2]
+DETECTOR rec[-1]
+
+# Perform 1000 more rounds of measurements.
+REPEAT 1000 {
+    CNOT 0 1 2 3 4 5
+    CNOT 2 1 4 3 6 5
+    MR 1 3 5
+
+    # Annotate that measurements should agree with previous round.
+    DETECTOR rec[-3] rec[-6]
+    DETECTOR rec[-2] rec[-5]
+    DETECTOR rec[-1] rec[-4]
+}
+
+# Measure data qubits.
+M 0 2 4 6
+
+# Annotate final detectors.
+DETECTOR rec[-3] rec[-4] rec[-7]
+DETECTOR rec[-2] rec[-3] rec[-6]
+DETECTOR rec[-1] rec[-2] rec[-5]
+
+# Declare logical observable.
+OBSERVABLE_INCLUDE(0) rec[-1]
+```
+
+</Accordion>
+
+<Accordion title="Noisy repetition code (annotated)">
+
+This is the output of `stim --gen repetition_code --task memory --rounds 1000 --distance 3 --after_clifford_depolarization 0.001`. It shows noise operations, `TICK` separators, and coordinate annotations.
+
+```stim
+# Generated repetition_code circuit.
+# task: memory
+# rounds: 1000
+# distance: 3
+# after_clifford_depolarization: 0.001
+# layout:
+# L0 Z1 d2 Z3 d4 Z5 d6
+R 0 1 2 3 4 5 6
+TICK
+CX 0 1 2 3 4 5
+DEPOLARIZE2(0.001) 0 1 2 3 4 5
+TICK
+CX 2 1 4 3 6 5
+DEPOLARIZE2(0.001) 2 1 4 3 6 5
+TICK
+MR 1 3 5
+DETECTOR(1, 0) rec[-3]
+DETECTOR(3, 0) rec[-2]
+DETECTOR(5, 0) rec[-1]
+REPEAT 999 {
+    TICK
+    CX 0 1 2 3 4 5
+    DEPOLARIZE2(0.001) 0 1 2 3 4 5
+    TICK
+    CX 2 1 4 3 6 5
+    DEPOLARIZE2(0.001) 2 1 4 3 6 5
+    TICK
+    MR 1 3 5
+    SHIFT_COORDS(0, 1)
+    DETECTOR(1, 0) rec[-3] rec[-6]
+    DETECTOR(3, 0) rec[-2] rec[-5]
+    DETECTOR(5, 0) rec[-1] rec[-4]
+}
+M 0 2 4 6
+DETECTOR(1, 1) rec[-3] rec[-4] rec[-7]
+DETECTOR(3, 1) rec[-2] rec[-3] rec[-6]
+DETECTOR(5, 1) rec[-1] rec[-2] rec[-5]
+OBSERVABLE_INCLUDE(0) rec[-1]
+```
+
+</Accordion>
+
+</AccordionGroup>

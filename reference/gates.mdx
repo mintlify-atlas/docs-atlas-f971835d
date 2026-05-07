@@ -1,0 +1,315 @@
+---
+title: "Stim gate reference: all supported gates"
+description: "Complete reference for all 100+ gates supported by Stim, organized by category: Pauli, Clifford, noise channels, measurements, and annotations."
+---
+
+Stim supports over 100 operations organized into eight categories: Pauli gates, single-qubit Clifford gates, two-qubit Clifford gates, noise channels, collapsing gates (measurements and resets), pair measurement gates, generalized Pauli product gates, control flow, and annotations. Gate names are case-insensitive and can be broadcast over multiple targets. All qubits start in the |0⟩ state by convention.
+
+<AccordionGroup>
+
+<Accordion title="Pauli Gates">
+
+Pauli gates apply the four fundamental single-qubit Pauli operations. They take no parenthesized arguments and accept one or more qubit targets.
+
+| Gate | Description | Stabilizer action |
+|------|-------------|-------------------|
+| `I` | Identity — does nothing | X → X, Z → Z |
+| `X` | Pauli X — bit flip | X → X, Z → −Z |
+| `Y` | Pauli Y | X → −X, Z → −Z |
+| `Z` | Pauli Z — phase flip | X → −X, Z → Z |
+
+```stim
+# Apply X to qubit 5, then Y and Z to multiple qubits
+X 5
+Y 5 42
+Z 0 1 2 3
+I 99
+```
+
+</Accordion>
+
+<Accordion title="Single-Qubit Clifford Gates">
+
+Single-qubit Clifford gates perform rotations within the single-qubit Clifford group. They take no parenthesized arguments and accept one or more qubit targets; when given multiple targets the gate is broadcast over each target in order.
+
+| Gate | Description |
+|------|-------------|
+| `H` / `H_XZ` | Hadamard — swaps X and Z axes |
+| `H_XY` | Hadamard variant swapping X and Y |
+| `H_YZ` | Hadamard variant swapping Y and Z |
+| `H_NXZ` | Hadamard with negation on X and Z |
+| `H_NXY` | Hadamard variant swapping −X and Y |
+| `H_NYZ` | Hadamard variant swapping −Y and Z |
+| `S` / `SQRT_Z` | S gate (phase gate) — 90° rotation around Z |
+| `S_DAG` / `SQRT_Z_DAG` | S† — inverse of S |
+| `SQRT_X` | 90° rotation around X |
+| `SQRT_X_DAG` | Inverse 90° rotation around X |
+| `SQRT_Y` | 90° rotation around Y |
+| `SQRT_Y_DAG` | Inverse 90° rotation around Y |
+| `C_XYZ` | Right-handed period-3 cycle X → Y → Z → X |
+| `C_ZYX` | Left-handed period-3 cycle X → Z → Y → X |
+| `C_NXYZ` | Period-3 cycle −X → Y → Z → −X |
+| `C_NZYX` | Period-3 cycle X → −Z → Y → X |
+| `C_XNYZ` | Period-3 cycle X → −Y → Z → X |
+| `C_XYNZ` | Period-3 cycle X → Y → −Z → X |
+| `C_ZNYX` | Period-3 cycle X → Z → −Y → X |
+| `C_ZYNX` | Period-3 cycle X → −Z → −Y → X |
+
+```stim
+# Hadamard on qubits 0, 1, 2
+H 0 1 2
+
+# S gate then its inverse (net identity up to global phase)
+S 0
+S_DAG 0
+
+# Period-3 axis cycle
+C_XYZ 5
+C_ZYX 5
+```
+
+<Note>
+`H`, `H_XZ`, `S`, and `SQRT_Z` are aliases for the same operation. `S_DAG` and `SQRT_Z_DAG` are also aliases for each other.
+</Note>
+
+</Accordion>
+
+<Accordion title="Two-Qubit Clifford Gates">
+
+Two-qubit Clifford gates act on pairs of qubits. When given more than two targets they are broadcast over aligned pairs in order — `CNOT 0 1 2 3` applies CNOT to (0,1) then (2,3). An odd number of targets is an error.
+
+| Gate | Description |
+|------|-------------|
+| `CNOT` / `CX` / `ZCX` | Controlled-X (controlled-NOT). Control qubit listed first. |
+| `CY` / `ZCY` | Controlled-Y |
+| `CZ` / `ZCZ` | Controlled-Z |
+| `SWAP` | Swaps two qubits |
+| `ISWAP` | SWAP with an extra iZ⊗Z phase |
+| `ISWAP_DAG` | Inverse of ISWAP |
+| `CXSWAP` | Applies CX then SWAP |
+| `SWAPCX` / `CZSWAP` | Applies SWAP then CX |
+| `SWAPCZ` | Applies SWAP then CZ |
+| `SQRT_XX` | 90° rotation in the XX plane |
+| `SQRT_XX_DAG` | Inverse 90° rotation in the XX plane |
+| `SQRT_YY` | 90° rotation in the YY plane |
+| `SQRT_YY_DAG` | Inverse 90° rotation in the YY plane |
+| `SQRT_ZZ` | 90° rotation in the ZZ plane |
+| `SQRT_ZZ_DAG` | Inverse 90° rotation in the ZZ plane |
+| `XCX` | X-controlled-X |
+| `XCY` | X-controlled-Y |
+| `XCZ` | X-controlled-Z |
+| `YCX` | Y-controlled-X |
+| `YCY` | Y-controlled-Y |
+| `YCZ` | Y-controlled-Z |
+| `II` | Two-qubit identity (does nothing) |
+
+```stim
+# Apply CNOT to pairs (0,1) and (2,3)
+CNOT 0 1 2 3
+
+# Entangle and then swap
+ISWAP 0 1
+SWAP 0 1
+
+# Controlled-Z between qubits 4 and 5
+CZ 4 5
+```
+
+</Accordion>
+
+<Accordion title="Noise Channels">
+
+Noise channels apply probabilistic errors. They take one probability argument inside parentheses, written as `GATE(p) targets`. They only have an effect during noisy simulation; they are no-ops in ideal stabilizer simulation unless the simulator is configured to include them.
+
+| Gate | Description |
+|------|-------------|
+| `X_ERROR(p)` | Apply X with probability `p` |
+| `Y_ERROR(p)` | Apply Y with probability `p` |
+| `Z_ERROR(p)` | Apply Z with probability `p` |
+| `I_ERROR(p)` | Apply identity with probability `p` (vacuous) |
+| `II_ERROR(p)` | Two-qubit identity error (vacuous) |
+| `DEPOLARIZE1(p)` | Uniform single-qubit depolarizing channel: X, Y, or Z each with probability `p/3` |
+| `DEPOLARIZE2(p)` | Uniform two-qubit depolarizing channel over all 15 non-identity Paulis |
+| `PAULI_CHANNEL_1(px, py, pz)` | Single-qubit Pauli channel with explicit X, Y, Z probabilities |
+| `PAULI_CHANNEL_2(pIX, pIY, pIZ, pXI, pXX, ...)` | Two-qubit Pauli channel with all 15 non-identity probabilities |
+| `CORRELATED_ERROR(p) X0 Y1 Z2` | Apply the given Pauli product with probability `p` |
+| `ELSE_CORRELATED_ERROR(p) ...` | Like `CORRELATED_ERROR` but conditioned on the preceding correlated error not having fired |
+| `E(p) ...` | Alias for `CORRELATED_ERROR` |
+| `HERALDED_ERASE(p)` | Erase qubit with probability `p`; always appends a herald measurement bit |
+| `HERALDED_PAULI_CHANNEL_1(p_no, pX, pY, pZ)` | Heralded single-qubit Pauli channel; always appends a herald bit |
+
+```stim
+# 0.1% two-qubit depolarizing noise after each CX
+CX 0 1 2 3
+DEPOLARIZE2(0.001) 0 1 2 3
+
+# Custom Pauli channel: X error 1%, Z error 2%
+PAULI_CHANNEL_1(0.01, 0, 0.02) 5
+
+# Correlated error: X on qubit 0 and Z on qubit 1, with probability 0.5%
+CORRELATED_ERROR(0.005) X0 Z1
+ELSE_CORRELATED_ERROR(0.003) X0 Y1
+```
+
+<Warning>
+`PAULI_CHANNEL_2` requires exactly 15 probability arguments (one for each non-identity two-qubit Pauli). The probabilities must sum to at most 1.
+</Warning>
+
+</Accordion>
+
+<Accordion title="Collapsing Gates (Measurements and Resets)">
+
+Collapsing gates measure and/or reset qubits. Measurement results are appended to the measurement record and can be referenced by subsequent instructions using `rec[-n]` targets. A `!` prefix on a qubit target inverts the recorded result.
+
+**Measurement gates**
+
+| Gate | Basis | Resets? |
+|------|-------|---------|
+| `M` / `MZ` | Z | No |
+| `MX` | X | No |
+| `MY` | Y | No |
+| `MR` / `MRZ` | Z | Yes |
+| `MRX` | X | Yes |
+| `MRY` | Y | Yes |
+
+**Reset gates** (no measurement result appended)
+
+| Gate | Resets to |
+|------|-----------|
+| `R` / `RZ` | |0⟩ (Z basis) |
+| `RX` | |+⟩ (X basis) |
+| `RY` | |i⟩ (Y basis) |
+
+```stim
+# Initialize, entangle, and measure in Z basis
+R 0 1
+H 0
+CNOT 0 1
+M 0 1
+
+# Measure-and-reset in X basis, invert qubit 1's result
+MRX 0 !1
+
+# Feed-forward from measurement record
+CZ rec[-1] 5
+```
+
+<Note>
+`M` and `MZ` are aliases. `MR` and `MRZ` are aliases. `R` and `RZ` are aliases.
+</Note>
+
+</Accordion>
+
+<Accordion title="Pair Measurement Gates">
+
+Pair measurement gates measure two-qubit Pauli products. Each pair of targets is measured as a joint observable.
+
+| Gate | Measured observable |
+|------|---------------------|
+| `MXX` | X⊗X on each target pair |
+| `MYY` | Y⊗Y on each target pair |
+| `MZZ` | Z⊗Z on each target pair |
+
+```stim
+# Measure XX parity of qubits 0 and 1
+MXX 0 1
+
+# Measure ZZ parities of (0,1) and (2,3)
+MZZ 0 1 2 3
+```
+
+</Accordion>
+
+<Accordion title="Generalized Pauli Product Gates">
+
+These gates apply or measure arbitrary Pauli products specified using Pauli targets (`X0`, `Y1`, `Z2`) joined by combiner tokens (`*`).
+
+| Gate | Description |
+|------|-------------|
+| `MPP` | Measure arbitrary Pauli product(s) |
+| `SPP` | Apply the square root of a Pauli product |
+| `SPP_DAG` | Apply the inverse square root of a Pauli product |
+
+```stim
+# Measure the Pauli product X0*Y1*Z2
+MPP X0*Y1*Z2
+
+# Measure two independent products in one instruction
+MPP X0*Z1 Y2*Y3
+
+# Invert the result of the first product
+MPP !X0*Z1 Y2*Y3
+
+# Apply sqrt(X0*Z1) then its inverse
+SPP X0*Z1
+SPP_DAG X0*Z1
+```
+
+</Accordion>
+
+<Accordion title="Annotations">
+
+Annotations carry metadata used for detection-event sampling, circuit drawing, and spacetime layout hinting. They have no effect on the quantum state or the measurement record.
+
+| Gate | Description |
+|------|-------------|
+| `DETECTOR(coords...)` | Declares a detection event defined by the XOR of the listed `rec[-n]` measurement results. Optional coordinate arguments hint at spacetime location. |
+| `OBSERVABLE_INCLUDE(k)` | XORs the listed `rec[-n]` results into logical observable `k`. |
+| `TICK` | Marks the boundary between time steps. Used for circuit drawing and timing hints. |
+| `QUBIT_COORDS(x, y, ...)` | Annotates the spacetime coordinates of a qubit. |
+| `SHIFT_COORDS(dx, dy, ...)` | Shifts the global coordinate offset, used inside `REPEAT` blocks. |
+| `MPAD(bit)` | Appends a constant 0 or 1 to the measurement record without measuring a qubit. |
+
+```stim
+# Label qubit positions for a surface code layout
+QUBIT_COORDS(1, 1) 1
+QUBIT_COORDS(2, 0) 2
+QUBIT_COORDS(3, 1) 3
+
+TICK
+CX 0 1 2 3
+TICK
+MR 1 3
+
+# Declare detector: fires if parity changed since last round
+DETECTOR(1, 0) rec[-2] rec[-4]
+DETECTOR(3, 0) rec[-1] rec[-3]
+
+# Declare logical observable from qubit 0's measurement
+OBSERVABLE_INCLUDE(0) rec[-1]
+```
+
+<Tip>
+`SHIFT_COORDS` inside a `REPEAT` block accumulates the coordinate offset on each iteration, which keeps detector coordinates distinct across rounds without manually incrementing them.
+</Tip>
+
+</Accordion>
+
+<Accordion title="Control Flow">
+
+Stim provides one control-flow construct: the `REPEAT` block.
+
+| Construct | Description |
+|-----------|-------------|
+| `REPEAT K { ... }` | Repeats the enclosed instructions exactly `K` times. `K` must be a positive integer (zero is not allowed). |
+
+```stim
+# Run 1000 rounds of syndrome extraction
+REPEAT 1000 {
+    CX 0 1 2 3 4 5
+    CX 2 1 4 3 6 5
+    MR 1 3 5
+    SHIFT_COORDS(0, 1)
+    DETECTOR(1, 0) rec[-3] rec[-6]
+    DETECTOR(3, 0) rec[-2] rec[-5]
+    DETECTOR(5, 0) rec[-1] rec[-4]
+}
+```
+
+<Warning>
+A `REPEAT 0 { ... }` block is a syntax error. Vacuous repeat blocks are disallowed because they create ambiguity about whether logical observables and detectors declared inside the block exist.
+</Warning>
+
+</Accordion>
+
+</AccordionGroup>

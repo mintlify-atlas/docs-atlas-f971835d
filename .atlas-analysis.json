@@ -1,28 +1,11 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
-  "name": "Stim",
+  "projectType": "sdk-library",
+  "projectName": "Stim",
+  "projectDescription": "A high-performance Python/C++ library for simulating and analyzing quantum stabilizer circuits, with a focus on quantum error correction.",
   "theme": "luma",
-  "colors": {
-    "primary": "#848c8e",
-    "light": "#11161e",
-    "dark": "#cfd0d2"
-  },
-  "favicon": "https://media.brand.dev/2b01fe20-c04b-4a1d-a2f9-1d2789c50a7a.jpg",
-  "logo": {
-    "light": "https://media.brand.dev/5ffd6ce4-2434-4b4b-920a-f8cacac8b48b.svg",
-    "dark": "https://media.brand.dev/5ffd6ce4-2434-4b4b-920a-f8cacac8b48b.svg"
-  },
-  "navbar": {
-    "primary": {
-      "type": "github",
-      "href": "https://github.com/quantumlib/Stim"
-    }
-  },
-  "footer": {
-    "socials": {
-      "github": "https://github.com/quantumlib/Stim"
-    }
-  },
+  "primaryColor": "#848c8e",
+  "lightColor": "#11161e",
+  "darkColor": "#cfd0d2",
   "navigation": {
     "tabs": [
       {
@@ -88,5 +71,36 @@
         ]
       }
     ]
-  }
+  },
+  "keyFeatures": [
+    "Ultra-fast stabilizer circuit simulation using vectorized AVX instructions",
+    "Reference frame sampling for bulk shot generation at kilohertz rates",
+    "Automatic detector error model generation from noisy circuits",
+    "Rich Python API with Circuit, Tableau, PauliString, and TableauSimulator classes",
+    "Command-line interface for scripting and pipeline integration",
+    "Sinter subproject for parallel Monte Carlo QEC sampling",
+    "Support for 100+ Clifford gates, noise channels, and measurement operations",
+    "Crumble interactive circuit editor for visualization"
+  ],
+  "publicApiSurface": [
+    "stim.Circuit",
+    "stim.Tableau",
+    "stim.PauliString",
+    "stim.TableauSimulator",
+    "stim.DetectorErrorModel",
+    "stim.CompiledMeasurementSampler",
+    "stim.CompiledDetectorSampler",
+    "stim.Circuit.compile_sampler()",
+    "stim.Circuit.detector_error_model()",
+    "stim.Circuit.generated()",
+    "stim.Circuit.diagram()",
+    "sinter.collect()",
+    "sinter.Task",
+    "sinter.plot_error_rate()",
+    "stim analyze_errors (CLI)",
+    "stim sample (CLI)",
+    "stim detect (CLI)",
+    "stim gen (CLI)",
+    "stim diagram (CLI)"
+  ]
 }

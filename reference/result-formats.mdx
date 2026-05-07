@@ -1,0 +1,404 @@
+---
+title: "Stim result data formats for samples"
+description: "Reference for all six Stim result formats: 01, b8, r8, ptb64, hits, and dets — with encoding rules, tradeoffs, and Python parse/save examples."
+---
+
+Stim supports six result formats for storing measurement samples, detection event samples, and observable frame change samples. All formats are intentionally minimalist: they contain no metadata about the circuit, the shot count, or the number of bits per shot. That context must be supplied by the caller. The choice of format depends on whether human readability or binary compactness is preferred, and whether the data is dense (many 1s) or sparse (few 1s).
+
+<CardGroup cols={3}>
+  <Card title="01" icon="align-left">
+    Dense text — one character per bit. Easiest to read and debug.
+  </Card>
+  <Card title="b8" icon="binary">
+    Dense binary — 8 bits per byte, little-endian within each byte. Efficient for storage.
+  </Card>
+  <Card title="r8" icon="list">
+    Sparse binary — run-length encoding of gaps between 1s. Efficient when 1s are rare.
+  </Card>
+  <Card title="ptb64" icon="table">
+    Dense binary — transposed layout optimized for SIMD. Requires shot count divisible by 64.
+  </Card>
+  <Card title="hits" icon="filter">
+    Sparse text — comma-separated indices of set bits. Readable and compact for sparse data.
+  </Card>
+  <Card title="dets" icon="tag">
+    Sparse labeled text — prefixed detector (`D`) and observable (`L`) indices. Human-readable detection events.
+  </Card>
+</CardGroup>
+
+## `01` — ASCII text format
+
+The `01` format stores each shot as a line of `0` and `1` characters, terminated by a newline (`\n`). It is the default format used by Stim because it is the simplest to inspect.
+
+Each character maps directly to one bit: `'0'` means False, `'1'` means True.
+
+**Example output** — 10 shots of the same deterministic circuit:
+
+```text
+00001111001101
+00001111001101
+00001111001101
+00001111001101
+00001111001101
+```
+
+**When to use:** Debugging, visual inspection, and any situation where file size is not a concern.
+
+<CodeGroup>
+
+```python parse_01
+from typing import List
+
+def parse_01(data: str) -> List[List[bool]]:
+    shots = []
+    for line in data.split('\n'):
+        if not line:
+            continue
+        shot = []
+        for c in line:
+            assert c in '01'
+            shot.append(c == '1')
+        shots.append(shot)
+    return shots
+```
+
+```python save_01
+from typing import List
+
+def save_01(shots: List[List[bool]]) -> str:
+    output = ""
+    for shot in shots:
+        for sample in shot:
+            output += '1' if sample else '0'
+        output += "\n"
+    return output
+```
+
+</CodeGroup>
+
+## `b8` — packed binary format
+
+The `b8` format stores each shot as `ceil(n / 8)` bytes, where `n` is the number of bits per shot. Shots are padded with trailing `False` bits to reach a byte boundary. Bits are packed in significance order: the least significant bit (2⁰ position) holds the first bit of the shot, the 2¹ position holds the second, and so on up to the 2⁷ position for the eighth bit.
+
+This format requires the reader to know the number of bits per shot.
+
+**Example output** — 10 shots of 14 bits: `f0 2c f0 2c f0 2c ...` (hex, 20 bytes total — 2 bytes per shot)
+
+**When to use:** Storage efficiency when data is dense and the bit count per shot is known.
+
+<Warning>
+The reader must know `bits_per_shot` to correctly parse `b8` data. The format contains no embedded length information.
+</Warning>
+
+<CodeGroup>
+
+```python parse_b8
+from typing import List
+
+def parse_b8(data: bytes, bits_per_shot: int) -> List[List[bool]]:
+    shots = []
+    bytes_per_shot = (bits_per_shot + 7) // 8
+    for offset in range(0, len(data), bytes_per_shot):
+        shot = []
+        for k in range(bits_per_shot):
+            byte = data[offset + k // 8]
+            bit = (byte >> (k % 8)) % 2 == 1
+            shot.append(bit)
+        shots.append(shot)
+    return shots
+```
+
+```python save_b8
+from typing import List
+
+def save_b8(shots: List[List[bool]]) -> bytes:
+    output = b""
+    for shot in shots:
+        bytes_per_shot = (len(shot) + 7) // 8
+        v = 0
+        for b in reversed(shot):
+            v <<= 1
+            v += int(b)
+        output += v.to_bytes(bytes_per_shot, 'little')
+    return output
+```
+
+</CodeGroup>
+
+## `r8` — run-length encoded binary format
+
+The `r8` format stores each shot as a sequence of bytes, where each byte encodes the number of `False` bits before the next `True` bit. The maximum byte value (255) is special: it means "255 False bits, with no following True bit." A sentinel `True` bit is appended to each shot before encoding, so the decoder knows when one shot ends and the next begins.
+
+This format requires the reader to know `bits_per_shot`.
+
+**Example output** — 10 shots of a 14-bit pattern `00001111001101`: `4 0 0 0 2 0 1 0` per shot (hex: `04 00 00 00 02 00 01 00`)
+
+**When to use:** Detection event sampling where only a small fraction of bits are 1 (sparse data).
+
+<CodeGroup>
+
+```python parse_r8
+from typing import List
+
+def parse_r8(data: bytes, bits_per_shot: int) -> List[List[bool]]:
+    shots = []
+    shot = []
+    for byte in data:
+        shot += [False] * byte
+        if byte != 255:
+            shot.append(True)
+        if len(shot) > bits_per_shot:
+            assert len(shot) == bits_per_shot + 1 and shot[-1]
+            shot.pop()
+            shots.append(shot)
+            shot = []
+    assert len(shot) == 0
+    return shots
+```
+
+```python save_r8
+from typing import List
+
+def save_r8(shots: List[List[bool]]) -> bytes:
+    output = []
+    for shot in shots:
+        gap = 0
+        for b in list(shot) + [True]:
+            if b:
+                while gap >= 255:
+                    gap -= 255
+                    output.append((255).to_bytes(1, 'big'))
+                output.append(gap.to_bytes(1, 'big'))
+                gap = 0
+            else:
+                gap += 1
+    return b''.join(output)
+```
+
+</CodeGroup>
+
+## `ptb64` — transposed bit-packed format
+
+The `ptb64` format arranges data for SIMD-parallel processing across 64 shots at a time. Instead of storing all bits of shot 0 followed by all bits of shot 1, it stores all 64 copies of measurement 0 (one bit per shot) packed into a single 8-byte word, followed by all 64 copies of measurement 1, and so on. After the full set of measurements for 64 shots, the pattern repeats for the next group of 64 shots.
+
+Bits within each 8-byte word are stored in shot order, least-significant bit first.
+
+**Constraints:**
+- The number of shots **must be a multiple of 64**.
+- The reader must know both `bits_per_shot` and the total shot count.
+
+**Example output** — 64 shots of a 2-bit circuit (`M 0 1`, with qubit 1 always 1): `0 0 0 0 0 0 0 0 ff ff ff ff ff ff ff ff` (hex — 8 zero bytes for measurement 0, 8 `0xff` bytes for measurement 1)
+
+**When to use:** High-throughput data processing pipelines that can exploit SIMD instructions (e.g., fast decoding with bitwise operations).
+
+<CodeGroup>
+
+```python parse_ptb64
+from typing import List
+
+def parse_ptb64(data: bytes, bits_per_shot: int) -> List[List[bool]]:
+    num_shot_groups = int(len(data) * 8 / bits_per_shot / 64)
+    if len(data) * 8 != num_shot_groups * 64 * bits_per_shot:
+        raise ValueError("Number of shots must be a multiple of 64.")
+    result = [[False] * bits_per_shot for _ in range(num_shot_groups * 64)]
+    for group_index in range(num_shot_groups):
+        group_bit_offset = 64 * bits_per_shot * group_index
+        for m in range(bits_per_shot):
+            m_bit_offset = m * 64
+            for shot in range(64):
+                bit_offset = group_bit_offset + m_bit_offset + shot
+                bit = data[bit_offset // 8] & (1 << (bit_offset % 8)) != 0
+                s = group_index * 64 + shot
+                result[s][m] = bit
+    return result
+```
+
+```python save_ptb64
+from typing import List
+
+def save_ptb64(shots: List[List[bool]]):
+    if len(shots) % 64 != 0:
+        raise ValueError("Number of shots must be a multiple of 64.")
+    output = []
+    for shot_offset in range(0, len(shots), 64):
+        bits_per_shot = len(shots[0])
+        for measure_index in range(bits_per_shot):
+            v = 0
+            for k in range(64)[::-1]:
+                v <<= 1
+                v += int(shots[shot_offset + k][measure_index])
+            output.append(v.to_bytes(8, 'little'))
+    return b''.join(output)
+```
+
+</CodeGroup>
+
+## `hits` — sparse integer list format
+
+The `hits` format stores each shot as a newline-terminated line of comma-separated integers. Each integer is the zero-based index of a bit that was `True`. Bits not listed were `False`. An empty line represents a shot with no `True` bits.
+
+This format requires the reader to know `bits_per_shot` to reconstruct a dense bit vector.
+
+**Example output** — 10 shots of a 14-bit pattern `00001111001101`:
+
+```text
+4,5,6,7,10,11,13
+4,5,6,7,10,11,13
+4,5,6,7,10,11,13
+```
+
+**When to use:** Sparse data (detection events) where a human-readable format is preferred over `dets`.
+
+<CodeGroup>
+
+```python parse_hits
+from typing import List
+
+def parse_hits(data: str, bits_per_shot: int) -> List[List[bool]]:
+    shots = []
+    if data.endswith('\n'):
+        data = data[:-1]
+    for line in data.split('\n'):
+        shot = [False] * bits_per_shot
+        if line:
+            for term in line.split(','):
+                shot[int(term)] = True
+        shots.append(shot)
+    return shots
+```
+
+```python save_hits
+from typing import List
+
+def save_hits(shots: List[List[bool]]) -> str:
+    output = ""
+    for shot in shots:
+        output += ",".join(str(i) for i, b in enumerate(shot) if b) + "\n"
+    return output
+```
+
+</CodeGroup>
+
+## `dets` — labeled detector/observable format
+
+The `dets` format stores each shot as a line beginning with the word `shot`, followed by space-separated labeled values. Each value is a prefix letter followed by an index:
+
+| Prefix | Meaning |
+|--------|---------|
+| `M` | Measurement result at that index was `True` |
+| `D` | Detection event at that index fired |
+| `L` | Logical observable at that index was flipped |
+
+Only values that are `True` are listed. An empty shot is represented as `shot` with nothing after it.
+
+**Example output** — 3 shots with detector D1 and observable L5 set:
+
+```text
+shot D1 L5
+shot D1 L5
+shot D1 L5
+```
+
+**When to use:** Detection event data or observable frame change data where labeled output is important (for example, feeding a decoder that needs to know which detectors fired).
+
+<Note>
+When sampling detection events with `compile_detector_sampler()`, pass `append_observables=True` to include observable frame changes as `L` values in the output.
+</Note>
+
+<CodeGroup>
+
+```python parse_dets
+from typing import List
+
+def parse_dets(
+    data: str,
+    num_detectors: int,
+    num_observables: int,
+) -> List[List[bool]]:
+    shots = []
+    for line in data.split('\n'):
+        if not line.strip():
+            continue
+        assert line.startswith('shot')
+        line = line[4:].strip()
+        shot = [False] * (num_detectors + num_observables)
+        if line:
+            for term in line.split(' '):
+                c = term[0]
+                v = int(term[1:])
+                if c == 'D':
+                    shot[v] = True
+                elif c == 'L':
+                    shot[num_detectors + v] = True
+                else:
+                    raise NotImplementedError(c)
+        shots.append(shot)
+    return shots
+```
+
+```python save_dets
+from typing import List
+
+def save_dets(
+    shots: List[List[bool]],
+    num_detectors: int,
+    num_observables: int,
+) -> str:
+    output = ""
+    for shot in shots:
+        output += "shot"
+        for k in range(num_detectors):
+            if shot[k]:
+                output += " D" + str(k)
+        for k in range(num_observables):
+            if shot[num_detectors + k]:
+                output += " L" + str(k)
+        output += "\n"
+    return output
+```
+
+</CodeGroup>
+
+## Format comparison
+
+| Format | Type | Density | Requires `bits_per_shot`? | Notes |
+|--------|------|---------|--------------------------|-------|
+| `01` | Text | Dense | No | Default; easiest to inspect |
+| `b8` | Binary | Dense | Yes | Most compact for dense data |
+| `r8` | Binary | Sparse | Yes | Compact when few bits are 1 |
+| `ptb64` | Binary | Dense | Yes | SIMD-optimized; shots must be multiple of 64 |
+| `hits` | Text | Sparse | Yes (for dense reconstruction) | Readable sparse format |
+| `dets` | Text | Sparse | Yes (for dense reconstruction) | Labeled; preferred for detection events |
+
+## Using formats with the Python API
+
+```python
+import stim
+
+circuit = stim.Circuit("""
+    X_ERROR(1) 1
+    M 0 1 2
+    DETECTOR rec[-1]
+    DETECTOR rec[-2]
+    DETECTOR rec[-3]
+    OBSERVABLE_INCLUDE(0) rec[-2]
+""")
+
+# Sample measurements in 01 format
+sampler = circuit.compile_sampler()
+sampler.sample_write(shots=100, filepath="samples.01", format="01")
+
+# Sample detection events in dets format (with observables appended)
+det_sampler = circuit.compile_detector_sampler()
+det_sampler.sample_write(
+    shots=100,
+    filepath="detections.dets",
+    format="dets",
+    append_observables=True,
+)
+
+# Sample into a numpy array directly
+import numpy as np
+samples = det_sampler.sample(shots=100, append_observables=True)
+# samples is a bool numpy array of shape (100, num_detectors + num_observables)
+```

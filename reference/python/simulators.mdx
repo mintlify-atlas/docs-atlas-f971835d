@@ -1,0 +1,660 @@
+---
+title: "Stim simulators: tableau and frame simulation"
+description: "Reference for stim.TableauSimulator (interactive stabilizer simulation) and stim.FlipSimulator (bulk frame sampling), with tips on choosing between them."
+---
+
+Stim provides two distinct simulator classes for different use cases. `stim.TableauSimulator` is a general-purpose stabilizer simulator that tracks the full quantum state as an inverse stabilizer tableau and supports interactive one-shot simulation. `stim.FlipSimulator` is a frame-based bulk sampler that represents quantum states only as collections of Pauli error frames, making it extremely fast for batch sampling but limited to computing error propagation rather than full wavefunction dynamics.
+
+<CardGroup cols={2}>
+  <Card title="TableauSimulator" icon="circle-play">
+    Full stabilizer state tracking. Use for interactive simulation, post-selection, syndrome decoding experiments, and circuits where you need the quantum state at intermediate steps.
+  </Card>
+  <Card title="FlipSimulator" icon="bolt">
+    Error-frame-only tracking over many parallel instances. Use for bulk sampling of detection events and observables when high throughput is the priority.
+  </Card>
+</CardGroup>
+
+---
+
+## stim.TableauSimulator
+
+A stabilizer circuit simulator that maintains an inverse stabilizer tableau as its internal state. Gates and measurements can be applied interactively, and the state can be inspected at any point.
+
+### Constructor
+
+<AccordionGroup>
+  <Accordion title="stim.TableauSimulator(seed=None)">
+    Creates a new `stim.TableauSimulator` starting in the all-zero state.
+
+    ```python
+    def __init__(self, *, seed: Optional[int] = None) -> None
+    ```
+
+    **Parameters**
+
+    | Name | Type | Description |
+    |------|------|-------------|
+    | `seed` | `int` or `None` | Deterministic RNG seed. Results are consistent only within the same Stim version. |
+
+    ```python
+    import stim
+
+    s = stim.TableauSimulator()
+    s.h(0)
+    s.cnot(0, 1)
+    result = s.measure(0)
+    print(s.measure(1) == result)  # True (entangled pair)
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Gate methods
+
+All single-qubit and two-qubit gate methods accept a variable number of qubit index arguments. Two-qubit gates accept pairs: `s.cnot(0, 1, 2, 3)` applies CNOT to qubits 0,1 and then to qubits 2,3.
+
+<Tabs>
+  <Tab title="Single-qubit gates">
+    | Method | Gate | Flow |
+    |--------|------|------|
+    | `h(*targets)` | Hadamard | X↔Z |
+    | `s(*targets)` | SQRT_Z (S) | X→Y |
+    | `s_dag(*targets)` | SQRT_Z_DAG | X→-Y |
+    | `x(*targets)` | Pauli X | Z→-Z |
+    | `y(*targets)` | Pauli Y | X→-X, Z→-Z |
+    | `z(*targets)` | Pauli Z | X→-X |
+    | `sqrt_x(*targets)` | SQRT_X | Z→-Y |
+    | `sqrt_x_dag(*targets)` | SQRT_X_DAG | Z→Y |
+    | `sqrt_y(*targets)` | SQRT_Y | X→-Z |
+    | `sqrt_y_dag(*targets)` | SQRT_Y_DAG | X→Z |
+    | `c_xyz(*targets)` | C_XYZ | X→Y→Z→X |
+    | `c_zyx(*targets)` | C_ZYX | Z→Y→X→Z |
+
+    ```python
+    import stim
+
+    s = stim.TableauSimulator()
+    s.h(0)
+    s.s(0)        # SQRT_Z
+    s.sqrt_x(1)
+    ```
+  </Tab>
+  <Tab title="Two-qubit gates">
+    | Method | Gate |
+    |--------|------|
+    | `cnot(*targets)` or `cx(*targets)` | Controlled-X (CNOT) |
+    | `cy(*targets)` | Controlled-Y |
+    | `cz(*targets)` | Controlled-Z |
+    | `swap(*targets)` | SWAP |
+    | `iswap(*targets)` | ISWAP |
+    | `iswap_dag(*targets)` | ISWAP_DAG |
+    | `xcx(*targets)` | X-controlled-X |
+    | `xcy(*targets)` | X-controlled-Y |
+    | `xcz(*targets)` | X-controlled-Z |
+    | `ycx(*targets)` | Y-controlled-X |
+    | `ycy(*targets)` | Y-controlled-Y |
+    | `ycz(*targets)` | Y-controlled-Z |
+    | `zcx(*targets)` | Z-controlled-X |
+    | `zcy(*targets)` | Z-controlled-Y |
+    | `zcz(*targets)` | Z-controlled-Z |
+
+    ```python
+    import stim
+
+    s = stim.TableauSimulator()
+    s.h(0)
+    s.cnot(0, 1)   # Bell pair on qubits 0,1
+    s.cz(1, 2)
+    ```
+  </Tab>
+  <Tab title="Noise methods">
+    | Method | Description |
+    |--------|-------------|
+    | `x_error(p, *targets)` | X error with probability `p` |
+    | `y_error(p, *targets)` | Y error with probability `p` |
+    | `z_error(p, *targets)` | Z error with probability `p` |
+    | `depolarize1(p, *targets)` | Single-qubit depolarizing noise |
+    | `depolarize2(p, *targets)` | Two-qubit depolarizing noise |
+
+    ```python
+    import stim
+
+    s = stim.TableauSimulator()
+    s.h(0)
+    s.depolarize1(0.01, 0)
+    ```
+  </Tab>
+</Tabs>
+
+### Measurement
+
+<AccordionGroup>
+  <Accordion title="measure() — measure in Z basis">
+    Measures a single qubit in the Z basis and returns the result.
+
+    ```python
+    def measure(self, target: int) -> bool
+    ```
+
+    ```python
+    import stim
+
+    s = stim.TableauSimulator()
+    s.x(0)
+    result = s.measure(0)  # True
+    ```
+  </Accordion>
+
+  <Accordion title="measure_many() — measure multiple qubits">
+    Measures multiple qubits and returns their results as a list.
+
+    ```python
+    def measure_many(self, *targets) -> List[bool]
+    ```
+
+    ```python
+    import stim
+
+    s = stim.TableauSimulator()
+    s.x(1)
+    results = s.measure_many(0, 1)  # [False, True]
+    ```
+  </Accordion>
+
+  <Accordion title="measure_kickback() — measure with entanglement info">
+    Measures a qubit and returns both the result and the Pauli string that anticommutes with the measurement basis (the "kickback"). The kickback can be used for post-selection or to undo a measurement.
+
+    ```python
+    def measure_kickback(self, target: int) -> Tuple[bool, Optional[stim.PauliString]]
+    ```
+
+    Returns `(result, kickback)` where `kickback` is `None` if the measurement was deterministic, or a `stim.PauliString` if it was random.
+
+    ```python
+    import stim
+
+    s = stim.TableauSimulator()
+    s.h(0)
+    result, kickback = s.measure_kickback(0)
+    # kickback == stim.PauliString("+X") if random measurement
+    ```
+  </Accordion>
+
+  <Accordion title="measure_observable() — Pauli product measurement">
+    Measures a multi-qubit Pauli observable (as if by `MPP`).
+
+    ```python
+    def measure_observable(
+        self,
+        observable: stim.PauliString,
+        *,
+        flip_probability: float = 0.0,
+    ) -> bool
+    ```
+
+    ```python
+    import stim
+
+    s = stim.TableauSimulator()
+    s.h(0)
+    s.cnot(0, 1)
+    s.measure_observable(stim.PauliString("XX"))  # False (deterministic)
+    s.measure_observable(stim.PauliString("ZZ"))  # True  (deterministic)
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### State inspection
+
+<AccordionGroup>
+  <Accordion title="peek_bloch() — single-qubit Bloch vector">
+    Returns the single-qubit Bloch vector of a qubit as a `stim.PauliString` stabilizer. Returns `I` if the qubit is entangled.
+
+    ```python
+    def peek_bloch(self, target: int) -> stim.PauliString
+    ```
+
+    | Return | State |
+    |--------|-------|
+    | `+Z` | \|0⟩ |
+    | `-Z` | \|1⟩ |
+    | `+X` | \|+⟩ |
+    | `-X` | \|−⟩ |
+    | `+Y` | \|i⟩ |
+    | `-Y` | \|−i⟩ |
+    | `I` | entangled |
+
+    ```python
+    import stim
+
+    s = stim.TableauSimulator()
+    s.peek_bloch(0)   # +Z  (in |0> state)
+    s.h(0)
+    s.peek_bloch(0)   # +X  (in |+> state)
+    s.cnot(0, 1)
+    s.peek_bloch(0)   # +_  (entangled)
+    ```
+  </Accordion>
+
+  <Accordion title="peek_observable_expectation() — Pauli expectation">
+    Returns the deterministic expectation value (+1, -1, or 0) of a Pauli observable.
+
+    ```python
+    def peek_observable_expectation(self, observable: stim.PauliString) -> int
+    ```
+
+    ```python
+    import stim
+
+    s = stim.TableauSimulator()
+    s.h(0)
+    s.cnot(0, 1)
+    s.peek_observable_expectation(stim.PauliString("XX"))  # +1
+    s.peek_observable_expectation(stim.PauliString("ZI"))  # 0 (random)
+    ```
+  </Accordion>
+
+  <Accordion title="peek_x(), peek_y(), peek_z() — single-axis expectation">
+    Returns the expected value of a single qubit's X, Y, or Z observable (+1, -1, or 0).
+
+    ```python
+    def peek_x(self, target: int) -> int
+    def peek_y(self, target: int) -> int
+    def peek_z(self, target: int) -> int
+    ```
+  </Accordion>
+
+  <Accordion title="current_inverse_tableau() — internal state as tableau">
+    Returns a copy of the simulator's internal inverse stabilizer tableau.
+
+    ```python
+    def current_inverse_tableau(self) -> stim.Tableau
+    ```
+
+    ```python
+    import stim
+
+    s = stim.TableauSimulator()
+    s.h(0)
+    s.cnot(0, 1)
+    inv_tab = s.current_inverse_tableau()
+    ```
+  </Accordion>
+
+  <Accordion title="current_measurement_record() — all measurement results">
+    Returns a copy of the complete measurement record since the simulator was created.
+
+    ```python
+    def current_measurement_record(self) -> List[bool]
+    ```
+
+    ```python
+    import stim
+
+    s = stim.TableauSimulator()
+    s.measure(0)  # False
+    s.x(0)
+    s.measure(0)  # True
+    s.current_measurement_record()  # [False, True]
+    ```
+  </Accordion>
+
+  <Accordion title="canonical_stabilizers() — current stabilizer generators">
+    Returns a standardized list of stabilizer generators of the current state.
+
+    ```python
+    def canonical_stabilizers(self) -> List[stim.PauliString]
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Post-selection
+
+<AccordionGroup>
+  <Accordion title="postselect_z(), postselect_x(), postselect_y() — force measurement outcomes">
+    Forces qubits into a specific eigenstate by post-selection. Raises `ValueError` if the postselection is impossible (the qubit was deterministically in the opposite state).
+
+    ```python
+    def postselect_z(
+        self,
+        targets: Union[int, Iterable[int]],
+        *,
+        desired_value: bool,
+    ) -> None
+
+    def postselect_x(
+        self,
+        targets: Union[int, Iterable[int]],
+        *,
+        desired_value: bool,
+    ) -> None
+
+    def postselect_y(
+        self,
+        targets: Union[int, Iterable[int]],
+        *,
+        desired_value: bool,
+    ) -> None
+    ```
+
+    ```python
+    import stim
+
+    s = stim.TableauSimulator()
+    s.h(0)
+    s.postselect_z(0, desired_value=True)  # force |1> outcome
+    s.peek_bloch(0)  # -Z
+    ```
+  </Accordion>
+
+  <Accordion title="postselect_observable() — force Pauli product outcome">
+    Post-selects a Pauli observable into a desired eigenstate.
+
+    ```python
+    def postselect_observable(
+        self,
+        observable: stim.PauliString,
+        *,
+        desired_value: bool = False,
+    ) -> None
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Running circuits
+
+<AccordionGroup>
+  <Accordion title="do() — apply a circuit or instruction">
+    Applies a circuit, a single instruction, or a repeat block to the simulator's state.
+
+    ```python
+    def do(
+        self,
+        obj: Union[stim.Circuit, stim.CircuitInstruction, stim.CircuitRepeatBlock],
+    ) -> None
+    ```
+
+    ```python
+    import stim
+
+    s = stim.TableauSimulator()
+    s.do(stim.Circuit("H 0\nCNOT 0 1\nM 0 1"))
+    print(s.current_measurement_record())
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### State management
+
+<AccordionGroup>
+  <Accordion title="set_inverse_tableau() — overwrite the internal state">
+    Replaces the simulator's internal state with the given inverse tableau.
+
+    ```python
+    def set_inverse_tableau(self, new_inverse_tableau: stim.Tableau) -> None
+    ```
+  </Accordion>
+
+  <Accordion title="set_num_qubits() — resize the tracked state">
+    Resizes the simulator's tracked qubit range. Qubits outside the new range are implicitly reset to \|0⟩.
+
+    ```python
+    def set_num_qubits(self, new_num_qubits: int) -> None
+    ```
+  </Accordion>
+
+  <Accordion title="num_qubits — current tracked count">
+    ```python
+    @property
+    def num_qubits(self) -> int
+    ```
+
+    The number of qubits currently tracked. Grows automatically when higher-indexed qubits are touched.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## stim.FlipSimulator
+
+A frame-based simulator that tracks many simulation instances in parallel. Each instance is a Pauli error frame over qubits — a compact description of which Pauli errors have accumulated. This enables very fast bulk sampling of measurement flips, detector events, and observable flips, but does not support general quantum state queries.
+
+<Note>
+  `stim.FlipSimulator` only tracks error *frames*, not full stabilizer states. It cannot perform post-selection or return Bloch vectors. Use `stim.TableauSimulator` when you need full state information.
+</Note>
+
+### Constructor
+
+<AccordionGroup>
+  <Accordion title="stim.FlipSimulator(batch_size, ...)">
+    Creates a flip simulator with the given number of parallel instances.
+
+    ```python
+    def __init__(
+        self,
+        batch_size: int,
+        *,
+        disable_stabilizer_randomization: bool = False,
+        num_qubits: int = 0,
+        seed: Optional[int] = None,
+    ) -> None
+    ```
+
+    **Parameters**
+
+    | Name | Type | Description |
+    |------|------|-------------|
+    | `batch_size` | `int` | Number of parallel simulation instances. |
+    | `disable_stabilizer_randomization` | `bool` | When `True`, initial Z stabilizer flips are suppressed. Useful for testing. |
+    | `num_qubits` | `int` | Initial number of qubits to track. |
+    | `seed` | `int` or `None` | Deterministic RNG seed. |
+
+    ```python
+    import stim
+
+    sim = stim.FlipSimulator(batch_size=256)
+    sim.do(stim.Circuit('''
+        X_ERROR(0.01) 0 1 2
+        M 0 1 2
+        DETECTOR rec[-1] rec[-2]
+        DETECTOR rec[-2] rec[-3]
+    '''))
+    flips = sim.get_detector_flips()  # shape (2, 256)
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Applying operations
+
+<AccordionGroup>
+  <Accordion title="do() — apply a circuit">
+    Applies a circuit, instruction, or repeat block to all simulation instances.
+
+    ```python
+    def do(
+        self,
+        obj: Union[stim.Circuit, stim.CircuitInstruction, stim.CircuitRepeatBlock],
+    ) -> None
+    ```
+
+    ```python
+    import stim
+
+    sim = stim.FlipSimulator(batch_size=1024)
+    sim.do(stim.Circuit.generated(
+        "surface_code:rotated_memory_x",
+        distance=5,
+        rounds=10,
+        after_clifford_depolarization=0.001,
+    ))
+    obs = sim.get_observable_flips()  # shape (1, 1024)
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Reading results
+
+<AccordionGroup>
+  <Accordion title="get_measurement_flips() — raw measurement results">
+    Returns measurement flip data as a numpy array.
+
+    ```python
+    def get_measurement_flips(
+        self,
+        *,
+        record_index: Optional[int] = None,
+        instance_index: Optional[int] = None,
+        bit_packed: bool = False,
+    ) -> np.ndarray
+    ```
+
+    By default returns a 2D array of shape `(num_measurements, batch_size)` with `dtype=bool_`.
+  </Accordion>
+
+  <Accordion title="get_detector_flips() — detection event results">
+    Returns detection event flip data.
+
+    ```python
+    def get_detector_flips(
+        self,
+        *,
+        detector_index: Optional[int] = None,
+        instance_index: Optional[int] = None,
+        bit_packed: bool = False,
+    ) -> np.ndarray
+    ```
+
+    By default returns a 2D array of shape `(num_detectors, batch_size)`.
+  </Accordion>
+
+  <Accordion title="get_observable_flips() — logical observable results">
+    Returns logical observable flip data.
+
+    ```python
+    def get_observable_flips(
+        self,
+        *,
+        observable_index: Optional[int] = None,
+        instance_index: Optional[int] = None,
+        bit_packed: bool = False,
+    ) -> np.ndarray
+    ```
+
+    By default returns a 2D array of shape `(num_observables, batch_size)`.
+  </Accordion>
+
+  <Accordion title="peek_pauli_flips() — current error frames">
+    Returns the current Pauli error frames as a list of `stim.PauliString` objects, one per instance.
+
+    ```python
+    def peek_pauli_flips(
+        self,
+        *,
+        instance_index: Optional[int] = None,
+    ) -> Union[stim.PauliString, List[stim.PauliString]]
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Injecting errors
+
+<AccordionGroup>
+  <Accordion title="set_pauli_flip() — inject a Pauli error">
+    Sets a Pauli error on a specific qubit in a specific simulation instance.
+
+    ```python
+    def set_pauli_flip(
+        self,
+        pauli: Union[str, int],
+        *,
+        qubit_index: int,
+        instance_index: int,
+    ) -> None
+    ```
+
+    The `pauli` argument accepts `'I'`, `'X'`, `'Y'`, `'Z'`, `'_'`, or integers 0–3.
+
+    ```python
+    import stim
+
+    sim = stim.FlipSimulator(batch_size=4, num_qubits=3,
+                             disable_stabilizer_randomization=True)
+    sim.set_pauli_flip('X', qubit_index=1, instance_index=2)
+    print(sim.peek_pauli_flips(instance_index=2))  # +_X_
+    ```
+  </Accordion>
+
+  <Accordion title="broadcast_pauli_errors() — bulk injection">
+    Injects Pauli errors into all instances at once, sampling independently.
+
+    ```python
+    def broadcast_pauli_errors(
+        self,
+        pauli: Union[str, int],
+        mask: np.ndarray,
+    ) -> None
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Properties
+
+<CardGroup cols={2}>
+  <Card title="batch_size" icon="layer-group">
+    `int` — Number of parallel simulation instances.
+  </Card>
+  <Card title="num_qubits" icon="microchip">
+    `int` — Number of qubits currently tracked.
+  </Card>
+  <Card title="num_measurements" icon="ruler">
+    `int` — Measurements accumulated so far.
+  </Card>
+  <Card title="num_detectors" icon="triangle-exclamation">
+    `int` — Detector events accumulated so far.
+  </Card>
+  <Card title="num_observables" icon="eye">
+    `int` — Observables currently tracked.
+  </Card>
+</CardGroup>
+
+---
+
+## Choosing a simulator
+
+<Tabs>
+  <Tab title="Use TableauSimulator when...">
+    - You need full quantum state queries (Bloch vectors, expectation values)
+    - You want interactive step-by-step simulation
+    - You need post-selection
+    - You are simulating one or a small number of circuits
+    - You need the measurement kickback for adaptive circuits
+
+    ```python
+    import stim
+
+    s = stim.TableauSimulator()
+    s.h(0)
+    s.cnot(0, 1)
+    if s.measure_kickback(0)[0]:
+        s.x(1)
+    ```
+  </Tab>
+  <Tab title="Use FlipSimulator or compiled samplers when...">
+    - You need to sample thousands or millions of shots
+    - You only care about measurement, detector, or observable results
+    - You are benchmarking decoders
+
+    ```python
+    import stim
+
+    circuit = stim.Circuit.generated(
+        "surface_code:rotated_memory_x",
+        distance=5,
+        rounds=10,
+        after_clifford_depolarization=0.001,
+    )
+    # Compiled sampler (fastest for pure sampling)
+    sampler = circuit.compile_detector_sampler()
+    dets, obs = sampler.sample(shots=100_000, separate_observables=True)
+    ```
+  </Tab>
+</Tabs>
